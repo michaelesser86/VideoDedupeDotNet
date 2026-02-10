@@ -25,5 +25,24 @@ CREATE TABLE IF NOT EXISTS MediaFile (
 CREATE INDEX IF NOT EXISTS IX_MediaFile_Path ON MediaFile(Path);
 
 ");
+
+        await TryAddColumn(db, "MediaFile", "DurationSec", "REAL");
+        await TryAddColumn(db, "MediaFile", "Width", "INTEGER");
+        await TryAddColumn(db, "MediaFile", "Height", "INTEGER");
+        await TryAddColumn(db, "MediaFile", "Fps", "REAL");
+        await TryAddColumn(db, "MediaFile", "VideoCodec", "TEXT");
+        await TryAddColumn(db, "MediaFile", "Container", "TEXT");
+    }
+
+    private static async Task TryAddColumn(AppDb db, string table, string column, string type)
+    {
+        try
+        {
+            await db.ExecuteAsync($"ALTER TABLE {table} ADD COLUMN {column} {type};");
+        }
+        catch
+        {
+            // ignore "duplicate column name" and similar
+        }
     }
 }
