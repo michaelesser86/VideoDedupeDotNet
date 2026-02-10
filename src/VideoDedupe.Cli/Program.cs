@@ -77,6 +77,9 @@ switch (cmd)
             int indexed = 0;
             int skipped = 0;
 
+            var tools = new FfmpegTools();
+            var probe = new FfprobeService(tools);
+
             foreach (var r in enabled)
             {
                 if (!Directory.Exists(r.Path))
@@ -97,13 +100,28 @@ switch (cmd)
                         // store as ISO-8601
                         var modifiedUtc = fi.LastWriteTimeUtc.ToString("O");
                         var scannedUtc = DateTime.UtcNow.ToString("O");
-
+                        FfprobeService.ProbeResult meta;
+                        try
+                        {
+                            meta = await probe.ProbeAsync(full, CancellationToken.None);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"ffprobe failed: {full} :: {ex.Message}");
+                            meta = new FfprobeService.ProbeResult(null, null, null, null, null, null);
+                        }
                         await db.UpsertMediaFileAsync(new AppDb.MediaFileRow
                         {
                             Path = full,
                             SizeBytes = fi.Length,
                             ModifiedUtc = modifiedUtc,
-                            LastScannedUtc = scannedUtc
+                            LastScannedUtc = scannedUtc,
+                            DurationSec = meta.DurationSec,
+                            Width = meta.Width,
+                            Height = meta.Height,
+                            Fps = meta.Fps,
+                            VideoCodec = meta.VideoCodec,
+                            Container = meta.Container
                         });
 
                         indexed++;

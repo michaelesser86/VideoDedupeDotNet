@@ -15,6 +15,9 @@ public sealed class FfmpegTools
 
     public async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string exe, string arguments, CancellationToken ct)
     {
+        if (!File.Exists(exe) && exe.IndexOf(Path.DirectorySeparatorChar) >= 0)
+            throw new FileNotFoundException($"ffprobe not found at path: {exe}");
+
         var psi = new ProcessStartInfo
         {
             FileName = exe,

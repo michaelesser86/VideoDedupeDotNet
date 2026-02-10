@@ -41,6 +41,12 @@ namespace VideoDedupe.Infrastructure
             public long SizeBytes { get; set; }
             public string ModifiedUtc { get; set; } = "";
             public string LastScannedUtc { get; set; } = "";
+            public double? DurationSec { get; set; }
+            public int? Width { get; set; }
+            public int? Height { get; set; }
+            public double? Fps { get; set; }
+            public string? VideoCodec { get; set; }
+            public string? Container { get; set; }
         }
 
         public async Task<long> AddScanRootAsync(string path)
@@ -80,14 +86,20 @@ namespace VideoDedupe.Infrastructure
         public async Task UpsertMediaFileAsync(MediaFileRow row)
         {
             using var cn = Open();
-            await cn.ExecuteAsync(
-                @"INSERT INTO MediaFile(Path, SizeBytes, ModifiedUtc, LastScannedUtc)
-                  VALUES (@Path, @SizeBytes, @ModifiedUtc, @LastScannedUtc)
-                  ON CONFLICT(Path) DO UPDATE SET
+            await cn.ExecuteAsync(@"
+                INSERT INTO MediaFile(Path, SizeBytes, ModifiedUtc, LastScannedUtc, DurationSec, Width, Height, Fps, VideoCodec, Container)
+                VALUES (@Path, @SizeBytes, @ModifiedUtc, @LastScannedUtc, @DurationSec, @Width, @Height, @Fps, @VideoCodec, @Container)
+                ON CONFLICT(Path) DO UPDATE SET
                     SizeBytes=excluded.SizeBytes,
                     ModifiedUtc=excluded.ModifiedUtc,
-                    LastScannedUtc=excluded.LastScannedUtc",
-               row);
+                    LastScannedUtc=excluded.LastScannedUtc,
+                    DurationSec=excluded.DurationSec,
+                    Width=excluded.Width,
+                    Height=excluded.Height,
+                    Fps=excluded.Fps,
+                    VideoCodec=excluded.VideoCodec,
+                    Container=excluded.Container;
+                    ", row);
         }
 
         public async Task<List<MediaFileRow>> ListMediaFilesAsync(int take = 50)
