@@ -482,3 +482,8 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# VideoDedupe local database
+videodedupe.db
+*.sqlite
+*.sqlite3

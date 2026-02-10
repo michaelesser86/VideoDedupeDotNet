@@ -25,5 +25,49 @@ namespace VideoDedupe.Infrastructure
             using var cn = Open();
             await cn.ExecuteAsync(sql, args);
         }
+
+        public sealed class ScanRootRow
+        {
+            public long Id { get; set; }
+            public string Path { get; set; } = "";
+            public long IsEnabled { get; set; }
+            public string AddedUtc { get; set; } = "";
+        }
+
+        public async Task<long> AddScanRootAsync(string path)
+        {
+            var normalized = Normalize(path);
+            using var cn = Open();
+
+            await cn.ExecuteAsync(
+                "INSERT OR IGNORE INTO ScanRoot(Path, IsEnabled, AddedUtc) VALUES (@Path, 1, @Utc)",
+                new
+                {
+                    Path = normalized,
+                    Utc = DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture)
+                });
+
+            return await cn.ExecuteScalarAsync<long>(
+                "SELECT Id FROM ScanRoot WHERE Path = @Path",
+                new { Path = normalized });
+        }
+
+        public async Task<List<ScanRootRow>> ListScanRootsAsync()
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<ScanRootRow>(
+                "SELECT Id, Path, IsEnabled, AddedUtc FROM ScanRoot ORDER BY Id");
+            return rows.ToList();
+        }
+
+        public async Task ToggleScanRootAsync(long id)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(
+                "UPDATE ScanRoot SET IsEnabled = CASE WHEN IsEnabled=1 THEN 0 ELSE 1 END WHERE Id=@Id",
+                new { Id = id });
+        }
+
+        private static string Normalize(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant();
     }
 }
