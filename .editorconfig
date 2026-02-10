@@ -6,24 +6,24 @@ end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
 
+# Remove multiple empty lines at EOF / inside files
+max_line_length = off
+
 [*.cs]
 indent_style = space
 indent_size = 4
 
-# Make usings tidy
+# Usings
 dotnet_sort_system_directives_first = true
 dotnet_separate_import_directive_groups = true
 
-# Prefer file-scoped namespaces (modern .NET style)
+# Namespace style (modern, less vertical noise)
 csharp_style_namespace_declarations = file_scoped:suggestion
 
-# Prefer var where obvious
-csharp_style_var_when_type_is_apparent = suggestion
-csharp_style_var_elsewhere = suggestion
-csharp_style_var_for_built_in_types = suggestion
+# Reduce vertical whitespace noise
+csharp_style_allow_blank_line_after_colon_in_constructor_initializer = false:suggestion
+csharp_style_allow_blank_line_after_token_in_arrow_expression_clause = false:suggestion
 
-# Expression-bodied members (light)
+# Prefer compact expressions
 csharp_style_expression_bodied_methods = when_on_single_line:suggestion
 csharp_style_expression_bodied_properties = true:suggestion
-
-# If you want stricter warnings later, we can tighten these.

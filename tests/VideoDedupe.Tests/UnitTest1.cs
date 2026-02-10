@@ -1,4 +1,4 @@
-﻿namespace VideoDedupe.Tests;
+namespace VideoDedupe.Tests;
 
 public class UnitTest1
 {

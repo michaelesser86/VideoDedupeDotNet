@@ -1,10 +1,10 @@
-﻿using Dapper;
-using Microsoft.Data.Sqlite;
+using Dapper;
 
+using Microsoft.Data.Sqlite;
 
 namespace VideoDedupe.Infrastructure
 {
-   public sealed class AppDb
+    public sealed class AppDb
     {
         private readonly string _dbPath;
 
@@ -12,7 +12,7 @@ namespace VideoDedupe.Infrastructure
         {
             _dbPath = dbPath;
         }
-        
+
         private SqliteConnection Open()
         {
             var cn = new SqliteConnection($"Data Source={_dbPath}");
@@ -25,6 +25,5 @@ namespace VideoDedupe.Infrastructure
             using var cn = Open();
             await cn.ExecuteAsync(sql, args);
         }
-        
     }
 }

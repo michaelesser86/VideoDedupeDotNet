@@ -1,4 +1,4 @@
-﻿namespace VideoDedupe.Core;
+namespace VideoDedupe.Core;
 
 public class Class1
 {

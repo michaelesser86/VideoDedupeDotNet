@@ -1,4 +1,4 @@
-﻿namespace VideoDedupe.Infrastructure;
+namespace VideoDedupe.Infrastructure;
 
 public static class DbInitializer
 {
