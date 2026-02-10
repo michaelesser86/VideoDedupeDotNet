@@ -34,6 +34,15 @@ namespace VideoDedupe.Infrastructure
             public string AddedUtc { get; set; } = "";
         }
 
+        public sealed class MediaFileRow
+        {
+            public long Id { get; set; }
+            public string Path { get; set; } = "";
+            public long SizeBytes { get; set; }
+            public string ModifiedUtc { get; set; } = "";
+            public string LastScannedUtc { get; set; } = "";
+        }
+
         public async Task<long> AddScanRootAsync(string path)
         {
             var normalized = Normalize(path);
@@ -66,6 +75,28 @@ namespace VideoDedupe.Infrastructure
             await cn.ExecuteAsync(
                 "UPDATE ScanRoot SET IsEnabled = CASE WHEN IsEnabled=1 THEN 0 ELSE 1 END WHERE Id=@Id",
                 new { Id = id });
+        }
+
+        public async Task UpsertMediaFileAsync(MediaFileRow row)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(
+                @"INSERT INTO MediaFile(Path, SizeBytes, ModifiedUtc, LastScannedUtc)
+                  VALUES (@Path, @SizeBytes, @ModifiedUtc, @LastScannedUtc)
+                  ON CONFLICT(Path) DO UPDATE SET
+                    SizeBytes=excluded.SizeBytes,
+                    ModifiedUtc=excluded.ModifiedUtc,
+                    LastScannedUtc=excluded.LastScannedUtc",
+               row);
+        }
+
+        public async Task<List<MediaFileRow>> ListMediaFilesAsync(int take = 50)
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<MediaFileRow>(
+                "SELECT Id, Path, SizeBytes, ModifiedUtc, LastScannedUtc FROM MediaFile ORDER BY Id DESC LIMIT @Take",
+                new { Take = take });
+            return rows.ToList();
         }
 
         private static string Normalize(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant();
