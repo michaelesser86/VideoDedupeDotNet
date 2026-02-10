@@ -487,3 +487,9 @@ $RECYCLE.BIN/
 videodedupe.db
 *.sqlite
 *.sqlite3
+
+# SQLite runtime files (WAL mode)
+*.db
+*.db-wal
+*.db-shm
+/videodedupe.db-wal
