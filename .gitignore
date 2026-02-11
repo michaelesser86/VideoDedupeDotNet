@@ -492,4 +492,3 @@ videodedupe.db
 *.db
 *.db-wal
 *.db-shm
-/videodedupe.db-wal
