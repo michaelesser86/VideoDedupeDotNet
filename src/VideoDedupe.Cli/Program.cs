@@ -16,6 +16,7 @@ if (remaining.Count == 0)
     Console.WriteLine("Usage:");
     Console.WriteLine("  scan-index [--db=videodedupe.db]");
     Console.WriteLine("  files-list [--db=videodedupe.db]");
+    Console.WriteLine("  dupe-candidates [--db=videodedupe.db] [--tol=0.25] [--min=2]");
 
     Console.WriteLine("  roots-add <path> [--db=videodedupe.db]");
     Console.WriteLine("  roots-list [--db=videodedupe.db]");
@@ -137,6 +138,78 @@ switch (cmd)
             }
 
             Console.WriteLine($"Done. Indexed={indexed}, Skipped={skipped}");
+            break;
+        }
+    case "dupe-candidates":
+        {
+            // defaults
+            double tol = 0.25;
+            int minItems = 2;
+
+            // parse optional args from remaining list: --tol=0.25 --min=2
+            foreach (var a in remaining.Skip(1))
+            {
+                if (a.StartsWith("--tol=", StringComparison.OrdinalIgnoreCase) &&
+                    double.TryParse(a.Split("=", 2)[1], System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var t))
+                    tol = t;
+
+                if (a.StartsWith("--min=", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(a.Split("=", 2)[1], out var m))
+                    minItems = m;
+            }
+
+            var files = await db.ListMediaFilesForCandidatesAsync();
+
+            // bucket by resolution + rounded duration (0.1s)
+            var buckets = files
+                .GroupBy(f => (f.Width!.Value, f.Height!.Value, DurKey: Math.Round(f.DurationSec!.Value, 1)))
+                .Where(g => g.Count() >= minItems)
+                .OrderByDescending(g => g.Count())
+                .ToList();
+
+            int groupNo = 0;
+
+            foreach (var b in buckets)
+            {
+                // refine: split bucket into sub-groups by tolerance around a seed duration
+                var remainingFiles = b.OrderBy(f => f.DurationSec).ToList();
+
+                while (remainingFiles.Count >= minItems)
+                {
+                    var seed = remainingFiles[0];
+                    var seedDur = seed.DurationSec!.Value;
+
+                    var cluster = remainingFiles
+                        .Where(f => Math.Abs(f.DurationSec!.Value - seedDur) <= tol)
+                        .ToList();
+
+                    // remove clustered
+                    foreach (var c in cluster)
+                        remainingFiles.Remove(c);
+
+                    if (cluster.Count < minItems)
+                        continue;
+
+                    groupNo++;
+
+                    var w = b.Key.Item1;
+                    var h = b.Key.Item2;
+                    var avgDur = cluster.Average(x => x.DurationSec!.Value);
+
+                    Console.WriteLine($"\nGroup {groupNo}  {w}x{h}  ~{avgDur:F2}s  items={cluster.Count}");
+
+                    foreach (var f in cluster.OrderByDescending(x => x.SizeBytes))
+                    {
+                        Console.WriteLine($"  - {f.Path}");
+                        Console.WriteLine($"    dur={f.DurationSec:F2}s  size={(f.SizeBytes / 1024 / 1024)} MiB  codec={f.VideoCodec ?? "?"}");
+                    }
+                }
+            }
+
+            if (groupNo == 0)
+                Console.WriteLine("No candidates found. Try a larger tolerance: --tol=0.5");
+
             break;
         }
 
