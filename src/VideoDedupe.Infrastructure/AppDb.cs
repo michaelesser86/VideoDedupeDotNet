@@ -111,6 +111,19 @@ namespace VideoDedupe.Infrastructure
             return rows.ToList();
         }
 
+        public async Task<List<MediaFileRow>> ListMediaFilesForCandidatesAsync()
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<MediaFileRow>(@"
+                SELECT
+                Id, Path, SizeBytes, ModifiedUtc, LastScannedUtc,
+                DurationSec, Width, Height, Fps, VideoCodec, Container
+                FROM MediaFile
+                WHERE DurationSec IS NOT NULL AND Width IS NOT NULL AND Height IS NOT NULL
+");
+            return rows.ToList();
+        }
+
         private static string Normalize(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant();
     }
 }
