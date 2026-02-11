@@ -1,0 +1,147 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:VideoDedupe.App.ViewModels"
+        x:Class="VideoDedupe.App.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Width="1200"
+        Height="750"
+        Title="VideoDedupe">
+
+  <Window.DataContext>
+    <vm:MainViewModel />
+  </Window.DataContext>
+
+  <Grid RowDefinitions="Auto,*"
+        ColumnDefinitions="380,*"
+        Margin="12">
+
+    <!-- Top Bar -->
+    <Border Grid.Row="0"
+            Grid.ColumnSpan="2"
+            Padding="10"
+            CornerRadius="10"
+            Background="#1E1E1E">
+
+      <StackPanel Orientation="Horizontal" Spacing="10">
+        <TextBlock Foreground="White"
+                   VerticalAlignment="Center"
+                   Text="DB:" />
+
+        <TextBox Width="320"
+                 Text="{Binding DbPath}" />
+
+        <Button Content="Load Groups"
+                Command="{Binding LoadGroupsCommand}"
+                IsEnabled="{Binding !IsBusy}" />
+
+        <TextBlock Foreground="#CFCFCF"
+                   VerticalAlignment="Center"
+                   Text="{Binding Status}" />
+      </StackPanel>
+    </Border>
+
+    <!-- Left: Group List -->
+    <Border Grid.Row="1"
+            Grid.Column="0"
+            Padding="10"
+            CornerRadius="10"
+            Background="#121212"
+            Margin="0,12,12,0">
+
+      <StackPanel>
+        <TextBlock Foreground="White"
+                   FontSize="16"
+                   Text="Duplicate Groups"
+                   Margin="0,0,0,8" />
+
+        <ListBox ItemsSource="{Binding Groups}"
+                 SelectedItem="{Binding SelectedGroup}">
+
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:GroupVm">
+              <Border Padding="8"
+                      Margin="0,0,0,8"
+                      CornerRadius="8"
+                      Background="#1E1E1E">
+
+                <StackPanel>
+                  <TextBlock Foreground="White"
+                             Text="{Binding Title}" />
+
+                  <TextBlock Foreground="#CFCFCF"
+                             Text="{Binding Algorithm}" />
+
+                  <TextBlock Foreground="#CFCFCF"
+                             Text="{Binding Frames, StringFormat=frames: {0}}" />
+                </StackPanel>
+              </Border>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </StackPanel>
+    </Border>
+
+    <!-- Right: Group Detail -->
+    <Border Grid.Row="1"
+            Grid.Column="1"
+            Padding="10"
+            CornerRadius="10"
+            Background="#121212"
+            Margin="0,12,0,0">
+
+      <StackPanel>
+        <TextBlock Foreground="White"
+                   FontSize="16"
+                   Margin="0,0,0,8"
+                   Text="{Binding SelectedGroup.Title}" />
+
+        <ScrollViewer>
+          <ItemsControl ItemsSource="{Binding SelectedGroup.Members}">
+
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:MemberVm">
+                <Border Padding="10"
+                        Margin="0,0,0,10"
+                        CornerRadius="10"
+                        Background="#1E1E1E">
+
+                  <StackPanel Spacing="6">
+
+                    <TextBlock Foreground="White"
+                               Text="{Binding Path}"
+                               TextWrapping="Wrap" />
+
+                    <StackPanel Orientation="Horizontal"
+                                Spacing="10">
+
+                      <TextBlock Foreground="#CFCFCF"
+                                 Text="{Binding AvgDist, StringFormat=avgDist: {0:F1}}" />
+
+                      <TextBlock Foreground="#CFCFCF"
+                                 Text="{Binding Width}" />
+
+                      <TextBlock Foreground="#CFCFCF"
+                                 Text="x" />
+
+                      <TextBlock Foreground="#CFCFCF"
+                                 Text="{Binding Height}" />
+
+                      <TextBlock Foreground="#CFCFCF"
+                                 Text="{Binding DurationSec, StringFormat={}{0:F2}s}" />
+
+                      <TextBlock Foreground="#CFCFCF"
+                                 Text="{Binding SizeBytes, StringFormat={}{0} bytes}" />
+
+                      <TextBlock Foreground="#CFCFCF"
+                                 Text="{Binding VideoCodec}" />
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>
