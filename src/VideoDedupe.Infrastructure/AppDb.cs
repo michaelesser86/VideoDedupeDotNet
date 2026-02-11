@@ -261,22 +261,22 @@ ORDER BY m.AvgDist ASC;
 
             return result;
         }
+
+        public sealed class DuplicateGroupRow
+        {
+            public long Id { get; set; }
+            public string Algorithm { get; set; } = "";
+            public string Frames { get; set; } = "";
+            public double TolSec { get; set; }
+            public double MaxAvgDist { get; set; }
+            public string CreatedUtc { get; set; } = "";
+        }
+
+        public sealed class DuplicateMemberRow
+        {
+            public long GroupId { get; set; }
+            public long MediaFileId { get; set; }
+            public double AvgDist { get; set; }
+        }
     }
-}
-
-public sealed class DuplicateGroupRow
-{
-    public long Id { get; set; }
-    public string Algorithm { get; set; } = "";
-    public string Frames { get; set; } = "";
-    public double TolSec { get; set; }
-    public double MaxAvgDist { get; set; }
-    public string CreatedUtc { get; set; } = "";
-}
-
-public sealed class DuplicateMemberRow
-{
-    public long GroupId { get; set; }
-    public long MediaFileId { get; set; }
-    public double AvgDist { get; set; }
 }

@@ -19,7 +19,8 @@ if (remaining.Count == 0)
     Console.WriteLine("  files-list [--db=videodedupe.db]");
     Console.WriteLine("  dupe-candidates [--db=videodedupe.db] [--tol=0.25] [--min=2]");
     Console.WriteLine("  dupe-verify [--db=videodedupe.db] [--tol=0.25] [--min=2] [--maxdist=6]");
-
+    Console.WriteLine("  dupe-build [--db=videodedupe.db] [--tol=0.25] [--min=2] [--maxdist=10] [--frames=20,50,80] [--clear=true]");
+    Console.WriteLine("  dupe-list [--db=videodedupe.db] [--take=20]");
     Console.WriteLine("  roots-add <path> [--db=videodedupe.db]");
     Console.WriteLine("  roots-list [--db=videodedupe.db]");
     Console.WriteLine("  roots-toggle <id> [--db=videodedupe.db]");
@@ -394,6 +395,196 @@ switch (cmd)
 
             if (groupNo == 0)
                 Console.WriteLine("No verified duplicates found. Try --tol=0.5 or --maxdist=12 or --frames=50");
+
+            break;
+        }
+    case "dupe-build":
+        {
+            double tol = 0.25;
+            int minItems = 2;
+            double maxAvgDist = 10.0;
+            var positions = new List<int> { 20, 50, 80 };
+            bool clear = true;
+
+            foreach (var a in remaining.Skip(1))
+            {
+                if (a.StartsWith("--tol=", StringComparison.OrdinalIgnoreCase) &&
+                    double.TryParse(a.Split("=", 2)[1], System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var t))
+                    tol = t;
+
+                if (a.StartsWith("--min=", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(a.Split("=", 2)[1], out var m))
+                    minItems = m;
+
+                if (a.StartsWith("--maxdist=", StringComparison.OrdinalIgnoreCase) &&
+                    double.TryParse(a.Split("=", 2)[1], System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var d))
+                    maxAvgDist = d;
+
+                if (a.StartsWith("--frames=", StringComparison.OrdinalIgnoreCase))
+                {
+                    var raw = a.Split("=", 2)[1];
+                    var parsed = raw.Split(',')
+                        .Select(s => s.Trim())
+                        .Where(s => int.TryParse(s, out _))
+                        .Select(int.Parse)
+                        .Where(p => p > 0 && p < 100)
+                        .Distinct()
+                        .OrderBy(p => p)
+                        .ToList();
+
+                    if (parsed.Count > 0)
+                        positions = parsed;
+                }
+
+                if (a.StartsWith("--clear=", StringComparison.OrdinalIgnoreCase) &&
+                    bool.TryParse(a.Split("=", 2)[1], out var c))
+                    clear = c;
+            }
+
+            if (clear)
+                await db.ClearDuplicateGroupsAsync();
+
+            var tools = new FfmpegTools();
+            var extractor = new FfmpegFrameExtractor(tools);
+            var hasher = new DHashService();
+
+            var files = await db.ListMediaFilesForCandidatesAsync();
+
+            var buckets = files
+                .GroupBy(f => (f.Width!.Value, f.Height!.Value, DurKey: Math.Round(f.DurationSec!.Value, 1)))
+                .Where(g => g.Count() >= minItems)
+                .OrderByDescending(g => g.Count())
+                .ToList();
+
+            int savedGroups = 0;
+
+            foreach (var b in buckets)
+            {
+                var bucketFiles = b.OrderBy(f => f.DurationSec).ToList();
+
+                while (bucketFiles.Count >= minItems)
+                {
+                    var seed = bucketFiles[0];
+                    var seedDur = seed.DurationSec!.Value;
+
+                    var cluster = bucketFiles
+                        .Where(f => Math.Abs(f.DurationSec!.Value - seedDur) <= tol)
+                        .ToList();
+
+                    foreach (var c in cluster)
+                        bucketFiles.Remove(c);
+
+                    if (cluster.Count < minItems)
+                        continue;
+
+                    // compute hashes
+                    var verified = new List<(AppDb.MediaFileRow File, Dictionary<int, ulong> Hashes)>();
+
+                    foreach (var f in cluster)
+                    {
+                        if (f.Id == 0) continue;
+                        if (f.DurationSec is null || f.DurationSec <= 1.0) continue;
+                        if (string.IsNullOrWhiteSpace(f.Path) || !File.Exists(f.Path)) continue;
+
+                        var map = new Dictionary<int, ulong>();
+
+                        foreach (var pos in positions)
+                        {
+                            var h = await db.GetFrameHashAsync(f.Id, pos);
+                            if (h is null)
+                            {
+                                try
+                                {
+                                    var ts = f.DurationSec.Value * (pos / 100.0);
+                                    var png = await extractor.ExtractFramePngAsync(f.Path, ts, CancellationToken.None);
+                                    var computed = hasher.ComputeDHash64(png);
+                                    await db.UpsertFrameHashAsync(f.Id, pos, computed);
+                                    h = computed;
+                                }
+                                catch
+                                {
+                                    continue;
+                                }
+                            }
+                            map[pos] = h.Value;
+                        }
+
+                        if (map.Count > 0)
+                            verified.Add((f, map));
+                    }
+
+                    if (verified.Count < minItems)
+                        continue;
+
+                    var seedHashes = verified[0].Hashes;
+
+                    double AvgDist(Dictionary<int, ulong> a, Dictionary<int, ulong> c)
+                    {
+                        var keys = a.Keys.Intersect(c.Keys).ToList();
+                        if (keys.Count == 0) return 9999;
+
+                        double sum = 0;
+                        foreach (var k in keys)
+                            sum += DHashService.HammingDistance(a[k], c[k]);
+
+                        return sum / keys.Count;
+                    }
+
+                    var final = verified
+                        .Select(v => (v.File, Avg: AvgDist(seedHashes, v.Hashes)))
+                        .Where(x => x.Avg <= maxAvgDist)
+                        .OrderBy(x => x.Avg)
+                        .ToList();
+
+                    if (final.Count < minItems)
+                        continue;
+
+                    // Save group + members
+                    var groupId = await db.InsertDuplicateGroupAsync(
+                        algorithm: "dhash",
+                        frames: string.Join(",", positions),
+                        tolSec: tol,
+                        maxAvgDist: maxAvgDist);
+
+                    var members = final.Select(x => new AppDb.DuplicateMemberRow
+                    {
+                        GroupId = groupId,
+                        MediaFileId = x.File.Id,
+                        AvgDist = x.Avg
+                    });
+
+                    await db.InsertDuplicateMembersAsync(groupId, members);
+
+                    savedGroups++;
+                }
+            }
+
+            Console.WriteLine($"Saved duplicate groups: {savedGroups}");
+            break;
+        }
+    case "dupe-list":
+        {
+            int take = 20;
+
+            foreach (var a in remaining.Skip(1))
+            {
+                if (a.StartsWith("--take=", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(a.Split("=", 2)[1], out var t))
+                    take = t;
+            }
+
+            var groups = await db.ListDuplicateGroupsWithMembersAsync(take);
+
+            foreach (var (g, members) in groups)
+            {
+                Console.WriteLine($"\nGroup {g.Id}  algo={g.Algorithm} frames={g.Frames} tol={g.TolSec} maxAvgDist={g.MaxAvgDist} created={g.CreatedUtc}");
+                Console.WriteLine($"Members: {members.Count}");
+
+                foreach (var (f, dist) in members.OrderBy(x => x.AvgDist))
+                    Console.WriteLine($"  - avgDist={dist,5:F1}  {f.Path}");
+            }
 
             break;
         }
