@@ -145,5 +145,138 @@ namespace VideoDedupe.Infrastructure
         }
 
         private static string Normalize(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant();
+
+        public async Task ClearDuplicateGroupsAsync()
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync("DELETE FROM DuplicateGroup;");
+        }
+
+        public async Task<long> InsertDuplicateGroupAsync(string algorithm, string frames, double tolSec, double maxAvgDist)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(@"
+INSERT INTO DuplicateGroup(Algorithm, Frames, TolSec, MaxAvgDist, CreatedUtc)
+VALUES (@Algorithm, @Frames, @TolSec, @MaxAvgDist, @Utc);
+", new
+            {
+                Algorithm = algorithm,
+                Frames = frames,
+                TolSec = tolSec,
+                MaxAvgDist = maxAvgDist,
+                Utc = DateTime.UtcNow.ToString("O")
+            });
+
+            return await cn.ExecuteScalarAsync<long>("SELECT last_insert_rowid();");
+        }
+
+        public async Task InsertDuplicateMembersAsync(long groupId, IEnumerable<DuplicateMemberRow> members)
+        {
+            using var cn = Open();
+            using var tx = cn.BeginTransaction();
+
+            foreach (var m in members)
+            {
+                await cn.ExecuteAsync(@"
+INSERT OR REPLACE INTO DuplicateMember(GroupId, MediaFileId, AvgDist)
+VALUES (@GroupId, @MediaFileId, @AvgDist);
+", m, tx);
+            }
+
+            tx.Commit();
+        }
+
+        private sealed class MemberJoinRow
+        {
+            public double AvgDist { get; set; }
+            public long Id { get; set; }
+            public string Path { get; set; } = "";
+            public long SizeBytes { get; set; }
+            public string ModifiedUtc { get; set; } = "";
+            public string LastScannedUtc { get; set; } = "";
+            public double? DurationSec { get; set; }
+            public int? Width { get; set; }
+            public int? Height { get; set; }
+            public double? Fps { get; set; }
+            public string? VideoCodec { get; set; }
+            public string? Container { get; set; }
+        }
+
+        public async Task<List<(DuplicateGroupRow Group, List<(MediaFileRow File, double AvgDist)> Members)>> ListDuplicateGroupsWithMembersAsync(int take = 50)
+        {
+            using var cn = Open();
+
+            var groups = (await cn.QueryAsync<DuplicateGroupRow>(@"
+SELECT Id, Algorithm, Frames, TolSec, MaxAvgDist, CreatedUtc
+FROM DuplicateGroup
+ORDER BY Id DESC
+LIMIT @Take;
+", new { Take = take })).ToList();
+
+            var result = new List<(DuplicateGroupRow, List<(MediaFileRow, double)>)>();
+
+            foreach (var g in groups)
+            {
+                var rows = (await cn.QueryAsync<MemberJoinRow>(@"
+SELECT
+  m.AvgDist as AvgDist,
+  f.Id as Id,
+  f.Path as Path,
+  f.SizeBytes as SizeBytes,
+  f.ModifiedUtc as ModifiedUtc,
+  f.LastScannedUtc as LastScannedUtc,
+  f.DurationSec as DurationSec,
+  f.Width as Width,
+  f.Height as Height,
+  f.Fps as Fps,
+  f.VideoCodec as VideoCodec,
+  f.Container as Container
+FROM DuplicateMember m
+JOIN MediaFile f ON f.Id = m.MediaFileId
+WHERE m.GroupId = @GroupId
+ORDER BY m.AvgDist ASC;
+", new { GroupId = g.Id })).ToList();
+
+                var members = rows.Select(r =>
+                (
+                    new MediaFileRow
+                    {
+                        Id = r.Id,
+                        Path = r.Path,
+                        SizeBytes = r.SizeBytes,
+                        ModifiedUtc = r.ModifiedUtc,
+                        LastScannedUtc = r.LastScannedUtc,
+                        DurationSec = r.DurationSec,
+                        Width = r.Width,
+                        Height = r.Height,
+                        Fps = r.Fps,
+                        VideoCodec = r.VideoCodec,
+                        Container = r.Container
+                    },
+                    r.AvgDist
+                )).ToList();
+
+                result.Add((g, members));
+            }
+
+            return result;
+        }
     }
+}
+
+public sealed class DuplicateGroupRow
+{
+    public long Id { get; set; }
+    public string Algorithm { get; set; } = "";
+    public string Frames { get; set; } = "";
+    public double TolSec { get; set; }
+    public double MaxAvgDist { get; set; }
+    public string CreatedUtc { get; set; } = "";
+}
+
+public sealed class DuplicateMemberRow
+{
+    public long GroupId { get; set; }
+    public long MediaFileId { get; set; }
+    public double AvgDist { get; set; }
 }
