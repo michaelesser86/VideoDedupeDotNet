@@ -216,14 +216,21 @@ switch (cmd)
         }
     case "dupe-verify":
         {
+            // Args:
+            // --tol=0.25 duration tolerance in seconds
+            // --min=2 minimum items per group
+            // --maxdist=10 maximum average hamming distance (0..64)
+            // --frames=20,50,80
             double tol = 0.25;
             int minItems = 2;
-            int maxDist = 6;
+            double maxAvgDist = 10.0;
+            var positions = new List<int> { 20, 50, 80 };
 
             foreach (var a in remaining.Skip(1))
             {
                 if (a.StartsWith("--tol=", StringComparison.OrdinalIgnoreCase) &&
-                    double.TryParse(a.Split("=", 2)[1], System.Globalization.NumberStyles.Any,
+                    double.TryParse(a.Split("=", 2)[1],
+                        System.Globalization.NumberStyles.Any,
                         System.Globalization.CultureInfo.InvariantCulture, out var t))
                     tol = t;
 
@@ -232,8 +239,26 @@ switch (cmd)
                     minItems = m;
 
                 if (a.StartsWith("--maxdist=", StringComparison.OrdinalIgnoreCase) &&
-                    int.TryParse(a.Split("=", 2)[1], out var d))
-                    maxDist = d;
+                    double.TryParse(a.Split("=", 2)[1],
+                        System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var d))
+                    maxAvgDist = d;
+
+                if (a.StartsWith("--frames=", StringComparison.OrdinalIgnoreCase))
+                {
+                    var raw = a.Split("=", 2)[1];
+                    var parsed = raw.Split(',')
+                        .Select(s => s.Trim())
+                        .Where(s => int.TryParse(s, out _))
+                        .Select(int.Parse)
+                        .Where(p => p > 0 && p < 100)
+                        .Distinct()
+                        .OrderBy(p => p)
+                        .ToList();
+
+                    if (parsed.Count > 0)
+                        positions = parsed;
+                }
             }
 
             var tools = new FfmpegTools();
@@ -242,6 +267,7 @@ switch (cmd)
 
             var files = await db.ListMediaFilesForCandidatesAsync();
 
+            // Candidate buckets by (width,height,rounded duration)
             var buckets = files
                 .GroupBy(f => (f.Width!.Value, f.Height!.Value, DurKey: Math.Round(f.DurationSec!.Value, 1)))
                 .Where(g => g.Count() >= minItems)
@@ -252,92 +278,126 @@ switch (cmd)
 
             foreach (var b in buckets)
             {
-                var remainingFiles = b.OrderBy(f => f.DurationSec).ToList();
+                // refine each bucket into subclusters by duration tolerance
+                var bucketFiles = b.OrderBy(f => f.DurationSec).ToList();
 
-                while (remainingFiles.Count >= minItems)
+                while (bucketFiles.Count >= minItems)
                 {
-                    var seed = remainingFiles[0];
+                    var seed = bucketFiles[0];
                     var seedDur = seed.DurationSec!.Value;
 
-                    var cluster = remainingFiles
+                    var cluster = bucketFiles
                         .Where(f => Math.Abs(f.DurationSec!.Value - seedDur) <= tol)
                         .ToList();
 
                     foreach (var c in cluster)
-                        remainingFiles.Remove(c);
+                        bucketFiles.Remove(c);
 
                     if (cluster.Count < minItems)
                         continue;
 
-                    // --- Verify with frame hash at 50% ---
-                    var verified = new List<(AppDb.MediaFileRow File, ulong Hash)>();
+                    // Load/compute hashes for each file in the cluster
+                    var verified = new List<(AppDb.MediaFileRow File, Dictionary<int, ulong> Hashes)>();
 
                     foreach (var f in cluster)
                     {
                         if (f.Id == 0) continue;
 
-                        var hash = await db.GetFrameHashAsync(f.Id, 50);
-                        if (hash is null)
+                        if (f.DurationSec is null || f.DurationSec <= 1.0)
                         {
-                            try
-                            {
-                                if (f.DurationSec is null || f.DurationSec <= 0.5)
-                                {
-                                    Console.WriteLine($"Skip frame (no/short duration): {f.Path}");
-                                    continue;
-                                }
-
-                                if (!File.Exists(f.Path))
-                                {
-                                    Console.WriteLine($"Skip frame (missing file): {f.Path}");
-                                    continue;
-                                }
-                                var ts = f.DurationSec!.Value * 0.5;
-                                var png = await extractor.ExtractFramePngAsync(f.Path, ts, CancellationToken.None);
-                                var h = hasher.ComputeDHash64(png);
-                                await db.UpsertFrameHashAsync(f.Id, 50, h);
-                                hash = h;
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"Skip frame: {f.Path} :: {ex}");
-                                continue;
-                            }
+                            Console.WriteLine($"Skip hashes (no/short duration): {f.Path}");
+                            continue;
                         }
 
-                        verified.Add((f, hash.Value));
+                        if (string.IsNullOrWhiteSpace(f.Path) || !File.Exists(f.Path))
+                        {
+                            Console.WriteLine($"Skip hashes (missing file): {f.Path}");
+                            continue;
+                        }
+
+                        var map = new Dictionary<int, ulong>();
+
+                        foreach (var pos in positions)
+                        {
+                            var h = await db.GetFrameHashAsync(f.Id, pos);
+
+                            if (h is null)
+                            {
+                                try
+                                {
+                                    var ts = f.DurationSec.Value * (pos / 100.0);
+                                    var png = await extractor.ExtractFramePngAsync(f.Path, ts, CancellationToken.None);
+                                    var computed = hasher.ComputeDHash64(png);
+
+                                    await db.UpsertFrameHashAsync(f.Id, pos, computed);
+                                    h = computed;
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"Skip frame {pos}%: {f.Path} :: {ex.Message}");
+                                    continue;
+                                }
+                            }
+
+                            if (h is not null)
+                                map[pos] = h.Value;
+                        }
+
+                        if (map.Count == 0)
+                            continue;
+
+                        verified.Add((f, map));
                     }
 
                     if (verified.Count < minItems)
                         continue;
 
-                    // seed-based verify
-                    var seedHash = verified[0].Hash;
+                    // Use first verified as seed; compare by average Hamming across shared positions
+                    var seedHashes = verified[0].Hashes;
+
+                    double AvgDist(Dictionary<int, ulong> a, Dictionary<int, ulong> c)
+                    {
+                        var keys = a.Keys.Intersect(c.Keys).ToList();
+                        if (keys.Count == 0) return 9999;
+
+                        double sum = 0;
+                        foreach (var k in keys)
+                            sum += DHashService.HammingDistance(a[k], c[k]);
+
+                        return sum / keys.Count;
+                    }
+
                     var final = verified
-                        .Select(v => (v.File, Dist: DHashService.HammingDistance(seedHash, v.Hash)))
-                        .Where(x => x.Dist <= maxDist)
-                        .OrderBy(x => x.Dist)
+                        .Select(v => (v.File, Avg: AvgDist(seedHashes, v.Hashes)))
+                        .Where(x => x.Avg <= maxAvgDist)
+                        .OrderBy(x => x.Avg)
                         .ToList();
 
                     if (final.Count < minItems)
                         continue;
 
                     groupNo++;
-                    Console.WriteLine($"\nVerified Group {groupNo}  {b.Key.Item1}x{b.Key.Item2}  ~{final.Average(x => x.File.DurationSec!.Value):F2}s  items={final.Count}  maxDist={maxDist}");
+
+                    var w = b.Key.Item1;
+                    var hgt = b.Key.Item2;
+                    var avgDur = final.Average(x => x.File.DurationSec!.Value);
+
+                    Console.WriteLine($"\nVerified Group {groupNo}  {w}x{hgt}  ~{avgDur:F2}s  items={final.Count}  tol={tol}  maxAvgDist={maxAvgDist}  frames={string.Join(",", positions)}");
 
                     foreach (var x in final.OrderByDescending(z => z.File.SizeBytes))
                     {
-                        Console.WriteLine($"  - dist={x.Dist,2}  {x.File.Path}");
+                        Console.WriteLine($"  - avgDist={x.Avg,5:F1}  {x.File.Path}");
                         Console.WriteLine($"    dur={x.File.DurationSec:F2}s  size={(x.File.SizeBytes / 1024 / 1024)} MiB  codec={x.File.VideoCodec ?? "?"}");
                     }
                 }
             }
 
             if (groupNo == 0)
-                Console.WriteLine("No verified duplicates found. Try --tol=0.5 or --maxdist=8");
+                Console.WriteLine("No verified duplicates found. Try --tol=0.5 or --maxdist=12 or --frames=50");
 
             break;
         }
+
     default:
         {
             Console.WriteLine("Unknown command.");
