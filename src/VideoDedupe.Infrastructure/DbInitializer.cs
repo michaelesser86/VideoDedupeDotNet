@@ -36,6 +36,28 @@ public static class DbInitializer
             );
             ");
 
+        await db.ExecuteAsync(@"
+CREATE TABLE IF NOT EXISTS DuplicateGroup (
+  Id INTEGER PRIMARY KEY AUTOINCREMENT,
+  Algorithm TEXT NOT NULL,           -- e.g. 'dhash'
+  Frames TEXT NOT NULL,              -- e.g. '20,50,80'
+  TolSec REAL NOT NULL,
+  MaxAvgDist REAL NOT NULL,
+  CreatedUtc TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS DuplicateMember (
+  GroupId INTEGER NOT NULL,
+  MediaFileId INTEGER NOT NULL,
+  AvgDist REAL NOT NULL,             -- avg dist to seed (or group representative)
+  PRIMARY KEY(GroupId, MediaFileId),
+  FOREIGN KEY(GroupId) REFERENCES DuplicateGroup(Id) ON DELETE CASCADE,
+  FOREIGN KEY(MediaFileId) REFERENCES MediaFile(Id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS IX_DuplicateMember_GroupId ON DuplicateMember(GroupId);
+");
+
         await TryAddColumn(db, "MediaFile", "DurationSec", "REAL");
         await TryAddColumn(db, "MediaFile", "Width", "INTEGER");
         await TryAddColumn(db, "MediaFile", "Height", "INTEGER");
