@@ -1,3 +1,4 @@
+using VideoDedupe.Core;
 using VideoDedupe.Infrastructure;
 
 string dbPath = "videodedupe.db";
@@ -17,6 +18,7 @@ if (remaining.Count == 0)
     Console.WriteLine("  scan-index [--db=videodedupe.db]");
     Console.WriteLine("  files-list [--db=videodedupe.db]");
     Console.WriteLine("  dupe-candidates [--db=videodedupe.db] [--tol=0.25] [--min=2]");
+    Console.WriteLine("  dupe-verify [--db=videodedupe.db] [--tol=0.25] [--min=2] [--maxdist=6]");
 
     Console.WriteLine("  roots-add <path> [--db=videodedupe.db]");
     Console.WriteLine("  roots-list [--db=videodedupe.db]");
@@ -212,7 +214,130 @@ switch (cmd)
 
             break;
         }
+    case "dupe-verify":
+        {
+            double tol = 0.25;
+            int minItems = 2;
+            int maxDist = 6;
 
+            foreach (var a in remaining.Skip(1))
+            {
+                if (a.StartsWith("--tol=", StringComparison.OrdinalIgnoreCase) &&
+                    double.TryParse(a.Split("=", 2)[1], System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var t))
+                    tol = t;
+
+                if (a.StartsWith("--min=", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(a.Split("=", 2)[1], out var m))
+                    minItems = m;
+
+                if (a.StartsWith("--maxdist=", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(a.Split("=", 2)[1], out var d))
+                    maxDist = d;
+            }
+
+            var tools = new FfmpegTools();
+            var extractor = new FfmpegFrameExtractor(tools);
+            var hasher = new DHashService();
+
+            var files = await db.ListMediaFilesForCandidatesAsync();
+
+            var buckets = files
+                .GroupBy(f => (f.Width!.Value, f.Height!.Value, DurKey: Math.Round(f.DurationSec!.Value, 1)))
+                .Where(g => g.Count() >= minItems)
+                .OrderByDescending(g => g.Count())
+                .ToList();
+
+            int groupNo = 0;
+
+            foreach (var b in buckets)
+            {
+                var remainingFiles = b.OrderBy(f => f.DurationSec).ToList();
+
+                while (remainingFiles.Count >= minItems)
+                {
+                    var seed = remainingFiles[0];
+                    var seedDur = seed.DurationSec!.Value;
+
+                    var cluster = remainingFiles
+                        .Where(f => Math.Abs(f.DurationSec!.Value - seedDur) <= tol)
+                        .ToList();
+
+                    foreach (var c in cluster)
+                        remainingFiles.Remove(c);
+
+                    if (cluster.Count < minItems)
+                        continue;
+
+                    // --- Verify with frame hash at 50% ---
+                    var verified = new List<(AppDb.MediaFileRow File, ulong Hash)>();
+
+                    foreach (var f in cluster)
+                    {
+                        if (f.Id == 0) continue;
+
+                        var hash = await db.GetFrameHashAsync(f.Id, 50);
+                        if (hash is null)
+                        {
+                            try
+                            {
+                                if (f.DurationSec is null || f.DurationSec <= 0.5)
+                                {
+                                    Console.WriteLine($"Skip frame (no/short duration): {f.Path}");
+                                    continue;
+                                }
+
+                                if (!File.Exists(f.Path))
+                                {
+                                    Console.WriteLine($"Skip frame (missing file): {f.Path}");
+                                    continue;
+                                }
+                                var ts = f.DurationSec!.Value * 0.5;
+                                var png = await extractor.ExtractFramePngAsync(f.Path, ts, CancellationToken.None);
+                                var h = hasher.ComputeDHash64(png);
+                                await db.UpsertFrameHashAsync(f.Id, 50, h);
+                                hash = h;
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Skip frame: {f.Path} :: {ex}");
+                                continue;
+                            }
+                        }
+
+                        verified.Add((f, hash.Value));
+                    }
+
+                    if (verified.Count < minItems)
+                        continue;
+
+                    // seed-based verify
+                    var seedHash = verified[0].Hash;
+                    var final = verified
+                        .Select(v => (v.File, Dist: DHashService.HammingDistance(seedHash, v.Hash)))
+                        .Where(x => x.Dist <= maxDist)
+                        .OrderBy(x => x.Dist)
+                        .ToList();
+
+                    if (final.Count < minItems)
+                        continue;
+
+                    groupNo++;
+                    Console.WriteLine($"\nVerified Group {groupNo}  {b.Key.Item1}x{b.Key.Item2}  ~{final.Average(x => x.File.DurationSec!.Value):F2}s  items={final.Count}  maxDist={maxDist}");
+
+                    foreach (var x in final.OrderByDescending(z => z.File.SizeBytes))
+                    {
+                        Console.WriteLine($"  - dist={x.Dist,2}  {x.File.Path}");
+                        Console.WriteLine($"    dur={x.File.DurationSec:F2}s  size={(x.File.SizeBytes / 1024 / 1024)} MiB  codec={x.File.VideoCodec ?? "?"}");
+                    }
+                }
+            }
+
+            if (groupNo == 0)
+                Console.WriteLine("No verified duplicates found. Try --tol=0.5 or --maxdist=8");
+
+            break;
+        }
     default:
         {
             Console.WriteLine("Unknown command.");

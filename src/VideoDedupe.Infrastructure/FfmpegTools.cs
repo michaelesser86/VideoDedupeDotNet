@@ -48,16 +48,23 @@ public sealed class FfmpegTools
             CreateNoWindow = true
         };
 
-        using var p = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start: {exe}");
+        using var p = Process.Start(psi)
+            ?? throw new InvalidOperationException($"Failed to start: {exe}");
+
+        // Read stderr in parallel (important for diagnostics)
+        var stderrTask = p.StandardError.ReadToEndAsync();
+
         await using var ms = new MemoryStream();
         await p.StandardOutput.BaseStream.CopyToAsync(ms, ct);
+
         await p.WaitForExitAsync(ct);
+        var stderr = await stderrTask;
 
         if (p.ExitCode != 0)
-        {
-            var err = await p.StandardError.ReadToEndAsync();
-            throw new InvalidOperationException($"{exe} failed ({p.ExitCode}): {err}");
-        }
+            throw new InvalidOperationException($"{exe} failed ({p.ExitCode}). stderr: {stderr}");
+
+        if (ms.Length == 0)
+            throw new InvalidOperationException($"{exe} produced no output. args: {arguments} stderr: {stderr}");
 
         return ms.ToArray();
     }

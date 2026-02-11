@@ -8,6 +8,8 @@ public sealed class DHashService
 {
     public ulong ComputeDHash64(byte[] pngBytes)
     {
+        if (pngBytes is null || pngBytes.Length == 0)
+            throw new ArgumentException("pngBytes is null/empty", nameof(pngBytes));
         using var img = Image.Load<Rgba32>(pngBytes);
         img.Mutate(x => x.Resize(9, 8).Grayscale());
 
