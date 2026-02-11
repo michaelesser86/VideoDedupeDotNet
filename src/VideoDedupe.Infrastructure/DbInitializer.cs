@@ -5,26 +5,36 @@ public static class DbInitializer
     public static async Task EnsureCreatedAsync(AppDb db)
     {
         await db.ExecuteAsync(@"
-PRAGMA journal_mode=WAL;
+            PRAGMA journal_mode=WAL;
 
-CREATE TABLE IF NOT EXISTS ScanRoot (
-  Id INTEGER PRIMARY KEY AUTOINCREMENT,
-  Path TEXT NOT NULL UNIQUE,
-  IsEnabled INTEGER NOT NULL DEFAULT 1,
-  AddedUtc TEXT NOT NULL
-);
+            CREATE TABLE IF NOT EXISTS ScanRoot (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Path TEXT NOT NULL UNIQUE,
+            IsEnabled INTEGER NOT NULL DEFAULT 1,
+            AddedUtc TEXT NOT NULL
+            );
 
-CREATE TABLE IF NOT EXISTS MediaFile (
-  Id INTEGER PRIMARY KEY AUTOINCREMENT,
-  Path TEXT NOT NULL UNIQUE,
-  SizeBytes INTEGER NOT NULL,
-  ModifiedUtc TEXT NOT NULL,
-  LastScannedUtc TEXT NOT NULL
-);
+            CREATE TABLE IF NOT EXISTS MediaFile (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Path TEXT NOT NULL UNIQUE,
+            SizeBytes INTEGER NOT NULL,
+            ModifiedUtc TEXT NOT NULL,
+            LastScannedUtc TEXT NOT NULL
+            );
 
-CREATE INDEX IF NOT EXISTS IX_MediaFile_Path ON MediaFile(Path);
+            CREATE INDEX IF NOT EXISTS IX_MediaFile_Path ON MediaFile(Path);
 
-");
+           ");
+
+        await db.ExecuteAsync(@"
+            CREATE TABLE IF NOT EXISTS FrameHash (
+            MediaFileId INTEGER NOT NULL,
+            PositionPct INTEGER NOT NULL,      -- e.g. 50
+            Hash64 INTEGER NOT NULL,
+            PRIMARY KEY(MediaFileId, PositionPct),
+            FOREIGN KEY(MediaFileId) REFERENCES MediaFile(Id) ON DELETE CASCADE
+            );
+            ");
 
         await TryAddColumn(db, "MediaFile", "DurationSec", "REAL");
         await TryAddColumn(db, "MediaFile", "Width", "INTEGER");

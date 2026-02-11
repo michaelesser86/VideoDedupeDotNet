@@ -124,6 +124,26 @@ namespace VideoDedupe.Infrastructure
             return rows.ToList();
         }
 
+        public async Task UpsertFrameHashAsync(long mediaFileId, int positionPct, ulong hash64)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(@"
+                INSERT INTO FrameHash(MediaFileId, PositionPct, Hash64)
+                VALUES (@MediaFileId, @PositionPct, @Hash64)
+                ON CONFLICT(MediaFileId, PositionPct) DO UPDATE SET Hash64=excluded.Hash64;
+                ", new { MediaFileId = mediaFileId, PositionPct = positionPct, Hash64 = unchecked((long)hash64) });
+        }
+
+        public async Task<ulong?> GetFrameHashAsync(long mediaFileId, int positionPct)
+        {
+            using var cn = Open();
+            var v = await cn.ExecuteScalarAsync<long?>(
+                "SELECT Hash64 FROM FrameHash WHERE MediaFileId=@Id AND PositionPct=@Pct",
+                new { Id = mediaFileId, Pct = positionPct });
+
+            return v is null ? null : unchecked((ulong)v.Value);
+        }
+
         private static string Normalize(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant();
     }
 }
