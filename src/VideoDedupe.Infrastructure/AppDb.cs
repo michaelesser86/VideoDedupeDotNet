@@ -202,6 +202,33 @@ VALUES (@GroupId, @MediaFileId, @AvgDist);
             public string? Container { get; set; }
         }
 
+        public async Task UpsertDecisionAsync(long mediaFileId, string decision, string? note = null)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(@"
+INSERT INTO ReviewDecision(MediaFileId, Decision, Note, DecidedUtc)
+VALUES (@MediaFileId, @Decision, @Note, @Utc)
+ON CONFLICT(MediaFileId) DO UPDATE SET
+  Decision=excluded.Decision,
+  Note=excluded.Note,
+  DecidedUtc=excluded.DecidedUtc;
+", new
+            {
+                MediaFileId = mediaFileId,
+                Decision = decision,
+                Note = note,
+                Utc = DateTime.UtcNow.ToString("O")
+            });
+        }
+
+        public async Task<(string Decision, string? Note, string DecidedUtc)?> GetDecisionAsync(long mediaFileId)
+        {
+            using var cn = Open();
+            return await cn.QueryFirstOrDefaultAsync<(string Decision, string? Note, string DecidedUtc)?>(
+                "SELECT Decision, Note, DecidedUtc FROM ReviewDecision WHERE MediaFileId=@Id",
+                new { Id = mediaFileId });
+        }
+
         public async Task<List<(DuplicateGroupRow Group, List<(MediaFileRow File, double AvgDist)> Members)>> ListDuplicateGroupsWithMembersAsync(int take = 50)
         {
             using var cn = Open();

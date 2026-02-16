@@ -58,6 +58,18 @@ CREATE TABLE IF NOT EXISTS DuplicateMember (
 CREATE INDEX IF NOT EXISTS IX_DuplicateMember_GroupId ON DuplicateMember(GroupId);
 ");
 
+        await db.ExecuteAsync(@"
+CREATE TABLE IF NOT EXISTS ReviewDecision (
+  Id INTEGER PRIMARY KEY AUTOINCREMENT,
+  MediaFileId INTEGER NOT NULL UNIQUE,
+  Decision TEXT NOT NULL,          -- 'keep' | 'quarantine' | 'skip'
+  Note TEXT NULL,
+  DecidedUtc TEXT NOT NULL,
+  FOREIGN KEY(MediaFileId) REFERENCES MediaFile(Id) ON DELETE CASCADE
+);
+");
+
+
         await TryAddColumn(db, "MediaFile", "DurationSec", "REAL");
         await TryAddColumn(db, "MediaFile", "Width", "INTEGER");
         await TryAddColumn(db, "MediaFile", "Height", "INTEGER");
