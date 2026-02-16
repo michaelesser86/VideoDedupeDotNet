@@ -326,7 +326,21 @@ switch (cmd)
                             {
                                 try
                                 {
-                                    var ts = f.DurationSec.Value * (pos / 100.0);
+                                    var dur = f.DurationSec!.Value;
+
+                                    // sanity check – Duration kaputt?
+                                    if (dur <= 1.0 || dur > 48 * 3600)
+                                    {
+                                        Console.WriteLine($"Skip frame {pos}% (bad duration={dur}): {f.Path}");
+                                        continue;
+                                    }
+
+                                    // Timestamp berechnen
+                                    var ts = dur * (pos / 100.0);
+
+                                    // Clamp: ffmpeg darf nie außerhalb des Videos seeken
+                                    ts = Math.Clamp(ts, 0.1, Math.Max(0.1, dur - 0.1));
+
                                     var png = await extractor.ExtractFramePngAsync(f.Path, ts, CancellationToken.None);
                                     var computed = hasher.ComputeDHash64(png);
 
@@ -398,6 +412,62 @@ switch (cmd)
 
             break;
         }
+    case "files-index":
+        {
+            Console.WriteLine("Indexing files...");
+
+            var roots = await db.ListScanRootsAsync();
+            if (roots.Count == 0)
+            {
+                Console.WriteLine("No scan roots configured. Use roots-add first.");
+                return;
+            }
+
+            var exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp4", ".mkv", ".avi", ".mov", ".wmv"
+    };
+
+            int added = 0;
+            int skipped = 0;
+
+            foreach (var r in roots)
+            {
+                if (!Directory.Exists(r.Path))
+                {
+                    Console.WriteLine($"Missing root: {r.Path}");
+                    continue;
+                }
+
+                Console.WriteLine($"Scanning {r.Path}");
+
+                foreach (var file in Directory.EnumerateFiles(r.Path, "*.*", SearchOption.AllDirectories))
+                {
+                    if (!exts.Contains(Path.GetExtension(file)))
+                        continue;
+
+                    try
+                    {
+                        var fi = new FileInfo(file);
+
+                        await db.UpsertMediaFileStubAsync(
+                            path: fi.FullName,
+                            sizeBytes: fi.Length,
+                            modifiedUtc: fi.LastWriteTimeUtc);
+
+                        added++;
+                    }
+                    catch
+                    {
+                        skipped++;
+                    }
+                }
+            }
+
+            Console.WriteLine($"Indexed files: {added}, skipped: {skipped}");
+            break;
+        }
+
     case "dupe-build":
         {
             double tol = 0.25;

@@ -48,6 +48,25 @@ namespace VideoDedupe.Infrastructure
             public string? VideoCodec { get; set; }
             public string? Container { get; set; }
         }
+        public async Task UpsertMediaFileStubAsync(string path, long sizeBytes, DateTime modifiedUtc)
+        {
+            using var cn = Open();
+
+            await cn.ExecuteAsync(@"
+INSERT INTO MediaFile(Path, SizeBytes, ModifiedUtc, LastScannedUtc)
+VALUES (@Path, @SizeBytes, @ModifiedUtc, @Now)
+ON CONFLICT(Path) DO UPDATE SET
+    SizeBytes = excluded.SizeBytes,
+    ModifiedUtc = excluded.ModifiedUtc,
+    LastScannedUtc = excluded.LastScannedUtc;
+", new
+            {
+                Path = path,
+                SizeBytes = sizeBytes,
+                ModifiedUtc = modifiedUtc.ToString("O"),
+                Now = DateTime.UtcNow.ToString("O")
+            });
+        }
 
         public async Task<long> AddScanRootAsync(string path)
         {

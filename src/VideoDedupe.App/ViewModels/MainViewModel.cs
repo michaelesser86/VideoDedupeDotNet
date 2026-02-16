@@ -238,7 +238,15 @@ public partial class MainViewModel : ObservableObject
                     continue;
                 }
 
-                var ts = m.DurationSec.Value * (pos / 100.0);
+                var dur = m.DurationSec!.Value;
+
+                // kaputte ffprobe-Werte abfangen
+                if (dur <= 1.0 || dur > 48 * 3600)
+                    return;
+
+                var ts = dur * (pos / 100.0);
+                ts = Math.Clamp(ts, 0.1, Math.Max(0.1, dur - 0.1));
+
 
                 byte[] png;
                 try
