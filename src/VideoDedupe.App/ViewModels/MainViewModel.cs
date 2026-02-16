@@ -6,7 +6,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
@@ -27,6 +29,9 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<GroupVm> Groups { get; } = new();
 
     [ObservableProperty] private GroupVm? selectedGroup;
+
+    private CancellationTokenSource? _thumbCts;
+
     private readonly FfmpegTools _tools = new();
     private readonly FfmpegFrameExtractor _extractor;
     private readonly Dictionary<(long MediaId, int Pos), Bitmap> _thumbCache = new();
@@ -34,6 +39,70 @@ public partial class MainViewModel : ObservableObject
     public MainViewModel()
     {
         _extractor = new FfmpegFrameExtractor(_tools);
+    }
+
+    partial void OnSelectedGroupChanged(GroupVm? value)
+    {
+        // Cancel previous thumbnail load
+        _thumbCts?.Cancel();
+        _thumbCts?.Dispose();
+        _thumbCts = null;
+
+        if (value is null)
+            return;
+
+        // Debounce: in case user scrolls quickly
+        _thumbCts = new CancellationTokenSource();
+        var ct = _thumbCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(200, ct);
+                await LoadThumbnailsInternalAsync(ct);
+            }
+            catch (OperationCanceledException) { }
+        });
+    }
+
+    [RelayCommand]
+    public async Task PickDbAsync()
+    {
+        try
+        {
+            var lifetime = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
+            var topLevel = lifetime?.MainWindow is null ? null : TopLevel.GetTopLevel(lifetime.MainWindow);
+            if (topLevel is null)
+            {
+                Status = "No UI context available.";
+                return;
+            }
+
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Select SQLite Database",
+                AllowMultiple = false,
+                FileTypeFilter = new[]
+                {
+                    new FilePickerFileType("SQLite Database")
+                    {
+                        Patterns = new[] { "*.db", "*.sqlite", "*.sqlite3" }
+                    },
+                    FilePickerFileTypes.All
+                }
+            });
+
+            if (files.Count > 0)
+            {
+                DbPath = files[0].Path.LocalPath;
+                Status = $"Selected: {DbPath}";
+            }
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
     }
 
     [RelayCommand]
@@ -66,6 +135,8 @@ public partial class MainViewModel : ObservableObject
                 foreach (var (file, avgDist) in members)
                     gvm.Members.Add(new MemberVm(file, avgDist));
 
+                MarkBestMember(gvm);
+
                 Groups.Add(gvm);
             }
 
@@ -83,50 +154,16 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    public async Task PickDbAsync()
+    public async Task LoadThumbnailsAsync()
     {
-        try
-        {
-            var topLevel = TopLevel.GetTopLevel(App.Current?.ApplicationLifetime switch
-            {
-                Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop => desktop.MainWindow,
-                _ => null
-            });
+        _thumbCts?.Cancel();
+        _thumbCts?.Dispose();
+        _thumbCts = new CancellationTokenSource();
 
-            if (topLevel is null)
-            {
-                Status = "No UI context available.";
-                return;
-            }
-
-            var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-            {
-                Title = "Select SQLite Database",
-                AllowMultiple = false,
-                FileTypeFilter = new[]
-                {
-                new FilePickerFileType("SQLite Database")
-                {
-                    Patterns = new[] { "*.db", "*.sqlite", "*.sqlite3" }
-                },
-                FilePickerFileTypes.All
-            }
-            });
-
-            if (files.Count > 0)
-            {
-                DbPath = files[0].Path.LocalPath;
-                Status = $"Selected: {DbPath}";
-            }
-        }
-        catch (Exception ex)
-        {
-            Status = $"Error: {ex.Message}";
-        }
+        await LoadThumbnailsInternalAsync(_thumbCts.Token);
     }
 
-    [RelayCommand]
-    public async Task LoadThumbnailsAsync()
+    private async Task LoadThumbnailsInternalAsync(CancellationToken ct)
     {
         if (SelectedGroup is null) return;
 
@@ -135,21 +172,23 @@ public partial class MainViewModel : ObservableObject
             IsBusy = true;
             Status = "Loading thumbnails...";
 
-            // ensure db exists
             var db = new AppDb(DbPath);
             await DbInitializer.EnsureCreatedAsync(db);
 
             var positions = new[] { 20, 50, 80 };
 
-            // parallelism limit (don’t melt CPU/IO)
+            // limit concurrency (disk + ffmpeg)
             using var sem = new SemaphoreSlim(2);
 
-            var tasks = SelectedGroup.Members.Select(async m =>
+            var members = SelectedGroup.Members.ToList();
+            var tasks = members.Select(async m =>
             {
-                await sem.WaitAsync();
+                ct.ThrowIfCancellationRequested();
+
+                await sem.WaitAsync(ct);
                 try
                 {
-                    await LoadThumbsForMemberAsync(db, m, positions);
+                    await LoadThumbsForMemberAsync(m, positions, ct);
                 }
                 finally
                 {
@@ -158,8 +197,11 @@ public partial class MainViewModel : ObservableObject
             }).ToList();
 
             await Task.WhenAll(tasks);
-
             Status = "Thumbnails loaded.";
+        }
+        catch (OperationCanceledException)
+        {
+            Status = "Thumbnail loading canceled.";
         }
         catch (Exception ex)
         {
@@ -171,9 +213,9 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private async Task LoadThumbsForMemberAsync(AppDb db, MemberVm m, int[] positions)
+    private async Task LoadThumbsForMemberAsync(MemberVm m, int[] positions, CancellationToken ct)
     {
-        // guard
+        // basic guards
         if (m.DurationSec is null || m.DurationSec <= 1.0) return;
         if (string.IsNullOrWhiteSpace(m.Path) || !File.Exists(m.Path)) return;
 
@@ -183,6 +225,8 @@ public partial class MainViewModel : ObservableObject
         {
             foreach (var pos in positions)
             {
+                ct.ThrowIfCancellationRequested();
+
                 var key = (m.MediaId, pos);
 
                 if (_thumbCache.TryGetValue(key, out var cached))
@@ -191,21 +235,18 @@ public partial class MainViewModel : ObservableObject
                     continue;
                 }
 
-                // timestamp
                 var ts = m.DurationSec.Value * (pos / 100.0);
 
                 byte[] png;
                 try
                 {
-                    png = await _extractor.ExtractFramePngAsync(m.Path, ts, CancellationToken.None);
+                    png = await _extractor.ExtractFramePngAsync(m.Path, ts, ct);
                 }
                 catch
                 {
-                    // silently skip single-frame failures
                     continue;
                 }
 
-                // create Bitmap from PNG bytes
                 Bitmap bmp;
                 await using (var ms = new MemoryStream(png))
                     bmp = new Bitmap(ms);
@@ -230,6 +271,33 @@ public partial class MainViewModel : ObservableObject
             case 80: m.Thumb80 = bmp; break;
         }
     }
+
+    private static void MarkBestMember(GroupVm g)
+    {
+        foreach (var m in g.Members)
+            m.IsBest = false;
+
+        if (g.Members.Count == 0) return;
+
+        static long Pixels(MemberVm m) => (m.Width ?? 0) * (long)(m.Height ?? 0);
+
+        static DateTime ModifiedOrMin(MemberVm m)
+        {
+            var s = m.File.ModifiedUtc;
+            if (!string.IsNullOrWhiteSpace(s) &&
+                DateTime.TryParse(s, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+                return dt;
+            return DateTime.MinValue;
+        }
+
+        var best = g.Members
+            .OrderByDescending(Pixels)
+            .ThenByDescending(m => m.SizeBytes)
+            .ThenByDescending(ModifiedOrMin)
+            .First();
+
+        best.IsBest = true;
+    }
 }
 
 public partial class GroupVm : ObservableObject
@@ -248,6 +316,8 @@ public partial class GroupVm : ObservableObject
 
 public partial class MemberVm : ObservableObject
 {
+    public AppDb.MediaFileRow File { get; }
+
     public long MediaId => File.Id;
     public string Path => File.Path;
     public long SizeBytes => File.SizeBytes;
@@ -258,12 +328,11 @@ public partial class MemberVm : ObservableObject
 
     public double AvgDist { get; }
 
-    public AppDb.MediaFileRow File { get; }
-
     [ObservableProperty] private Bitmap? thumb20;
     [ObservableProperty] private Bitmap? thumb50;
     [ObservableProperty] private Bitmap? thumb80;
     [ObservableProperty] private bool thumbsLoading;
+    [ObservableProperty] private bool isBest;
 
     public MemberVm(AppDb.MediaFileRow file, double avgDist)
     {

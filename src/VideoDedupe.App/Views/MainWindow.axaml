@@ -8,7 +8,7 @@
         Title="VideoDedupe">
 
   <Window.DataContext>
-    <vm:MainViewModel />
+    <vm:MainViewModel/>
   </Window.DataContext>
 
   <Grid RowDefinitions="Auto,*"
@@ -26,26 +26,27 @@
 
         <TextBlock Foreground="White"
                    VerticalAlignment="Center"
-                   Text="DB:" />
+                   Text="DB:"/>
 
         <TextBox Width="320"
-                 Text="{Binding DbPath}" />
+                 Text="{Binding DbPath}"/>
 
         <Button Content="Pick DB…"
                 Command="{Binding PickDbCommand}"
-                IsEnabled="{Binding !IsBusy}" />
+                IsEnabled="{Binding !IsBusy}"/>
 
         <Button Content="Load Groups"
                 Command="{Binding LoadGroupsCommand}"
-                IsEnabled="{Binding !IsBusy}" />
+                IsEnabled="{Binding !IsBusy}"/>
 
         <Button Content="Load Thumbnails"
                 Command="{Binding LoadThumbnailsCommand}"
-                IsEnabled="{Binding !IsBusy}" />
+                IsEnabled="{Binding !IsBusy}"/>
 
         <TextBlock Foreground="#CFCFCF"
                    VerticalAlignment="Center"
-                   Text="{Binding Status}" />
+                   Text="{Binding Status}"/>
+
       </StackPanel>
     </Border>
 
@@ -61,35 +62,34 @@
         <TextBlock Foreground="White"
                    FontSize="16"
                    Text="Duplicate Groups"
-                   Margin="0,0,0,8" />
+                   Margin="0,0,0,8"/>
 
         <ListBox ItemsSource="{Binding Groups}"
                  SelectedItem="{Binding SelectedGroup}">
 
           <ListBox.ItemTemplate>
             <DataTemplate x:DataType="vm:GroupVm">
-
               <Border Padding="8"
                       Margin="0,0,0,8"
                       CornerRadius="8"
                       Background="#1E1E1E">
-
                 <StackPanel>
                   <TextBlock Foreground="White"
-                             Text="{Binding Title}" />
+                             Text="{Binding Title}"/>
 
                   <TextBlock Foreground="#CFCFCF"
-                             Text="{Binding Algorithm}" />
+                             Text="{Binding Algorithm}"/>
 
                   <TextBlock Foreground="#CFCFCF"
-                             Text="{Binding Frames, StringFormat=frames: {0}}" />
+                             Text="{Binding Frames, StringFormat=frames: {0}}"/>
 
                   <TextBlock Foreground="#CFCFCF"
-                             Text="{Binding CreatedUtc}" />
+                             Text="{Binding CreatedUtc}"/>
                 </StackPanel>
               </Border>
             </DataTemplate>
           </ListBox.ItemTemplate>
+
         </ListBox>
       </StackPanel>
     </Border>
@@ -107,14 +107,13 @@
         <TextBlock Foreground="White"
                    FontSize="16"
                    Margin="0,0,0,8"
-                   Text="{Binding SelectedGroup.Title}" />
+                   Text="{Binding SelectedGroup.Title}"/>
 
         <ScrollViewer>
           <ItemsControl ItemsSource="{Binding SelectedGroup.Members}">
 
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:MemberVm">
-
                 <Border Padding="10"
                         Margin="0,0,0,10"
                         CornerRadius="10"
@@ -122,71 +121,70 @@
 
                   <StackPanel Spacing="6">
 
+                    <!-- BEST marker -->
+                    <TextBlock Foreground="#FFD700"
+                               Text="BEST"
+                               FontWeight="Bold"
+                               IsVisible="{Binding IsBest}"/>
+
                     <!-- Thumbnails -->
                     <StackPanel Orientation="Horizontal" Spacing="10">
 
-                      <Border Width="160"
-                              Height="90"
-                              Background="#0E0E0E"
-                              CornerRadius="8">
-                        <Image Source="{Binding Thumb20}"
-                               Stretch="UniformToFill" />
+                      <Border Width="160" Height="90" Background="#0E0E0E" CornerRadius="8">
+                        <Image Source="{Binding Thumb20}" Stretch="UniformToFill"/>
                       </Border>
 
-                      <Border Width="160"
-                              Height="90"
-                              Background="#0E0E0E"
-                              CornerRadius="8">
-                        <Image Source="{Binding Thumb50}"
-                               Stretch="UniformToFill" />
+                      <Border Width="160" Height="90" Background="#0E0E0E" CornerRadius="8">
+                        <Image Source="{Binding Thumb50}" Stretch="UniformToFill"/>
                       </Border>
 
-                      <Border Width="160"
-                              Height="90"
-                              Background="#0E0E0E"
-                              CornerRadius="8">
-                        <Image Source="{Binding Thumb80}"
-                               Stretch="UniformToFill" />
+                      <Border Width="160" Height="90" Background="#0E0E0E" CornerRadius="8">
+                        <Image Source="{Binding Thumb80}" Stretch="UniformToFill"/>
                       </Border>
+
                     </StackPanel>
 
                     <TextBlock Foreground="#AAAAAA"
                                Text="Loading thumbnails…"
-                               IsVisible="{Binding ThumbsLoading}" />
+                               IsVisible="{Binding ThumbsLoading}"/>
 
                     <!-- File Info -->
                     <TextBlock Foreground="White"
                                Text="{Binding Path}"
-                               TextWrapping="Wrap" />
+                               TextWrapping="Wrap"/>
 
                     <StackPanel Orientation="Horizontal" Spacing="10">
                       <TextBlock Foreground="#CFCFCF"
-                                 Text="{Binding AvgDist, StringFormat=avgDist: {0:F1}}" />
+                                 Text="{Binding AvgDist, StringFormat=avgDist: {0:F1}}"/>
 
                       <TextBlock Foreground="#CFCFCF"
-                                 Text="{Binding Width}" />
+                                 Text="{Binding Width}"/>
 
-                      <TextBlock Foreground="#CFCFCF" Text="x" />
-
-                      <TextBlock Foreground="#CFCFCF"
-                                 Text="{Binding Height}" />
+                      <TextBlock Foreground="#CFCFCF" Text="x"/>
 
                       <TextBlock Foreground="#CFCFCF"
-                                 Text="{Binding DurationSec, StringFormat={}{0:F2}s}" />
+                                 Text="{Binding Height}"/>
 
                       <TextBlock Foreground="#CFCFCF"
-                                 Text="{Binding SizeBytes, StringFormat={}{0} bytes}" />
+                                 Text="{Binding DurationSec, StringFormat={}{0:F2}s}"/>
 
                       <TextBlock Foreground="#CFCFCF"
-                                 Text="{Binding VideoCodec}" />
+                                 Text="{Binding SizeBytes, StringFormat={}{0} bytes}"/>
+
+                      <TextBlock Foreground="#CFCFCF"
+                                 Text="{Binding VideoCodec}"/>
                     </StackPanel>
+
                   </StackPanel>
                 </Border>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
+
           </ItemsControl>
         </ScrollViewer>
+
       </StackPanel>
     </Border>
+
   </Grid>
 </Window>
