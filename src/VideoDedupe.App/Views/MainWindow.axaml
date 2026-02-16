@@ -34,6 +34,12 @@
         <Button Content="Pick DB…"
                 Command="{Binding PickDbCommand}"
                 IsEnabled="{Binding !IsBusy}"/>
+        
+        <TextBlock Foreground="White" VerticalAlignment="Center" Text="Quarantine:"/>
+        <TextBox Width="260" Text="{Binding QuarantineRoot}"/>
+        <Button Content="Keep Best"
+                Command="{Binding KeepBestInSelectedGroupCommand}"
+                IsEnabled="{Binding !IsBusy}"/>
 
         <Button Content="Load Groups"
                 Command="{Binding LoadGroupsCommand}"
@@ -174,6 +180,18 @@
                       <TextBlock Foreground="#CFCFCF"
                                  Text="{Binding VideoCodec}"/>
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                      <Button Content="Keep"
+                              Command="{Binding $parent[Window].DataContext.MarkKeepCommand}"
+                              CommandParameter="{Binding .}" />
+                      <Button Content="Quarantine"
+                              Command="{Binding $parent[Window].DataContext.QuarantineCommand}"
+                              CommandParameter="{Binding .}" />
+                      <TextBlock Foreground="#CFCFCF" Text="{Binding Decision, StringFormat=decision: {0}}"/>
+                      <TextBlock Foreground="#CFCFCF" Text="{Binding Suggested, StringFormat=suggested: {0}}"
+                                 IsVisible="{Binding Suggested}"/>
+                    </StackPanel>
+
 
                   </StackPanel>
                 </Border>

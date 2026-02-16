@@ -30,6 +30,9 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty] private GroupVm? selectedGroup;
 
+    [ObservableProperty] private string quarantineRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "VideoDedupe_Quarantine");
+
+
     private CancellationTokenSource? _thumbCts;
 
     private readonly FfmpegTools _tools = new();
@@ -298,6 +301,85 @@ public partial class MainViewModel : ObservableObject
 
         best.IsBest = true;
     }
+
+    [RelayCommand]
+    public async Task MarkKeepAsync(MemberVm? m)
+    {
+        if (m is null) return;
+
+        try
+        {
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            await db.UpsertDecisionAsync(m.MediaId, "keep", note: m.Path);
+
+            m.Decision = "keep";
+            Status = "Marked KEEP.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    public async Task QuarantineAsync(MemberVm? m)
+    {
+        if (m is null) return;
+
+        try
+        {
+            IsBusy = true;
+            Status = "Quarantining...";
+
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            if (!File.Exists(m.Path))
+            {
+                Status = "File missing.";
+                return;
+            }
+
+            var mover = new VideoDedupe.Infrastructure.FileMover(QuarantineRoot);
+            var newPath = mover.MoveToQuarantine(m.Path);
+
+            await db.UpsertDecisionAsync(m.MediaId, "quarantine", note: $"moved to: {newPath}");
+
+            m.Decision = "quarantine";
+            Status = $"Moved to quarantine: {newPath}";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    public async Task KeepBestInSelectedGroupAsync()
+    {
+        if (SelectedGroup is null) return;
+
+        var best = SelectedGroup.Members.FirstOrDefault(x => x.IsBest);
+        if (best is null) return;
+
+        // mark best as keep, others as quarantine (just marking; user can click quarantine later)
+        await MarkKeepAsync(best);
+
+        foreach (var m in SelectedGroup.Members)
+        {
+            if (m == best) continue;
+            m.Suggested = "quarantine";
+        }
+
+        Status = "Best marked KEEP, others suggested QUARANTINE.";
+    }
+
 }
 
 public partial class GroupVm : ObservableObject
@@ -333,6 +415,9 @@ public partial class MemberVm : ObservableObject
     [ObservableProperty] private Bitmap? thumb80;
     [ObservableProperty] private bool thumbsLoading;
     [ObservableProperty] private bool isBest;
+    [ObservableProperty] private string? decision;   // "keep" / "quarantine"
+    [ObservableProperty] private string? suggested;  // "quarantine"
+
 
     public MemberVm(AppDb.MediaFileRow file, double avgDist)
     {
