@@ -29,6 +29,7 @@
 
         <TextBox Width="320"
                  Text="{Binding DbPath}" />
+        <Button Content="Pick DB…" Command="{Binding PickDbCommand}" IsEnabled="{Binding !IsBusy}" />
 
         <Button Content="Load Groups"
                 Command="{Binding LoadGroupsCommand}"

@@ -6,6 +6,8 @@ namespace VideoDedupe.App;
 
 public partial class App : Application
 {
+    public new static App? Current => Application.Current as App;
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);

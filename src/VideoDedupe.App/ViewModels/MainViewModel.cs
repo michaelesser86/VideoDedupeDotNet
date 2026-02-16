@@ -3,6 +3,9 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
 
+using Avalonia.Controls;
+using Avalonia.Platform.Storage;
+
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -63,6 +66,49 @@ public partial class MainViewModel : ObservableObject
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    public async Task PickDbAsync()
+    {
+        try
+        {
+            var topLevel = TopLevel.GetTopLevel(App.Current?.ApplicationLifetime switch
+            {
+                Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop => desktop.MainWindow,
+                _ => null
+            });
+
+            if (topLevel is null)
+            {
+                Status = "No UI context available.";
+                return;
+            }
+
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Select SQLite Database",
+                AllowMultiple = false,
+                FileTypeFilter = new[]
+                {
+                new FilePickerFileType("SQLite Database")
+                {
+                    Patterns = new[] { "*.db", "*.sqlite", "*.sqlite3" }
+                },
+                FilePickerFileTypes.All
+            }
+            });
+
+            if (files.Count > 0)
+            {
+                DbPath = files[0].Path.LocalPath;
+                Status = $"Selected: {DbPath}";
+            }
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
         }
     }
 }
