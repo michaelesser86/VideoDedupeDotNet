@@ -23,16 +23,24 @@
             Background="#1E1E1E">
 
       <StackPanel Orientation="Horizontal" Spacing="10">
+
         <TextBlock Foreground="White"
                    VerticalAlignment="Center"
                    Text="DB:" />
 
         <TextBox Width="320"
                  Text="{Binding DbPath}" />
-        <Button Content="Pick DB…" Command="{Binding PickDbCommand}" IsEnabled="{Binding !IsBusy}" />
+
+        <Button Content="Pick DB…"
+                Command="{Binding PickDbCommand}"
+                IsEnabled="{Binding !IsBusy}" />
 
         <Button Content="Load Groups"
                 Command="{Binding LoadGroupsCommand}"
+                IsEnabled="{Binding !IsBusy}" />
+
+        <Button Content="Load Thumbnails"
+                Command="{Binding LoadThumbnailsCommand}"
                 IsEnabled="{Binding !IsBusy}" />
 
         <TextBlock Foreground="#CFCFCF"
@@ -41,7 +49,7 @@
       </StackPanel>
     </Border>
 
-    <!-- Left: Group List -->
+    <!-- LEFT: Duplicate Groups -->
     <Border Grid.Row="1"
             Grid.Column="0"
             Padding="10"
@@ -60,6 +68,7 @@
 
           <ListBox.ItemTemplate>
             <DataTemplate x:DataType="vm:GroupVm">
+
               <Border Padding="8"
                       Margin="0,0,0,8"
                       CornerRadius="8"
@@ -74,6 +83,9 @@
 
                   <TextBlock Foreground="#CFCFCF"
                              Text="{Binding Frames, StringFormat=frames: {0}}" />
+
+                  <TextBlock Foreground="#CFCFCF"
+                             Text="{Binding CreatedUtc}" />
                 </StackPanel>
               </Border>
             </DataTemplate>
@@ -82,7 +94,7 @@
       </StackPanel>
     </Border>
 
-    <!-- Right: Group Detail -->
+    <!-- RIGHT: Group Detail -->
     <Border Grid.Row="1"
             Grid.Column="1"
             Padding="10"
@@ -91,6 +103,7 @@
             Margin="0,12,0,0">
 
       <StackPanel>
+
         <TextBlock Foreground="White"
                    FontSize="16"
                    Margin="0,0,0,8"
@@ -101,6 +114,7 @@
 
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:MemberVm">
+
                 <Border Padding="10"
                         Margin="0,0,0,10"
                         CornerRadius="10"
@@ -108,21 +122,51 @@
 
                   <StackPanel Spacing="6">
 
+                    <!-- Thumbnails -->
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+
+                      <Border Width="160"
+                              Height="90"
+                              Background="#0E0E0E"
+                              CornerRadius="8">
+                        <Image Source="{Binding Thumb20}"
+                               Stretch="UniformToFill" />
+                      </Border>
+
+                      <Border Width="160"
+                              Height="90"
+                              Background="#0E0E0E"
+                              CornerRadius="8">
+                        <Image Source="{Binding Thumb50}"
+                               Stretch="UniformToFill" />
+                      </Border>
+
+                      <Border Width="160"
+                              Height="90"
+                              Background="#0E0E0E"
+                              CornerRadius="8">
+                        <Image Source="{Binding Thumb80}"
+                               Stretch="UniformToFill" />
+                      </Border>
+                    </StackPanel>
+
+                    <TextBlock Foreground="#AAAAAA"
+                               Text="Loading thumbnails…"
+                               IsVisible="{Binding ThumbsLoading}" />
+
+                    <!-- File Info -->
                     <TextBlock Foreground="White"
                                Text="{Binding Path}"
                                TextWrapping="Wrap" />
 
-                    <StackPanel Orientation="Horizontal"
-                                Spacing="10">
-
+                    <StackPanel Orientation="Horizontal" Spacing="10">
                       <TextBlock Foreground="#CFCFCF"
                                  Text="{Binding AvgDist, StringFormat=avgDist: {0:F1}}" />
 
                       <TextBlock Foreground="#CFCFCF"
                                  Text="{Binding Width}" />
 
-                      <TextBlock Foreground="#CFCFCF"
-                                 Text="x" />
+                      <TextBlock Foreground="#CFCFCF" Text="x" />
 
                       <TextBlock Foreground="#CFCFCF"
                                  Text="{Binding Height}" />

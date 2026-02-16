@@ -1,10 +1,15 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 using Avalonia.Controls;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -22,6 +27,14 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<GroupVm> Groups { get; } = new();
 
     [ObservableProperty] private GroupVm? selectedGroup;
+    private readonly FfmpegTools _tools = new();
+    private readonly FfmpegFrameExtractor _extractor;
+    private readonly Dictionary<(long MediaId, int Pos), Bitmap> _thumbCache = new();
+
+    public MainViewModel()
+    {
+        _extractor = new FfmpegFrameExtractor(_tools);
+    }
 
     [RelayCommand]
     public async Task LoadGroupsAsync()
@@ -111,6 +124,112 @@ public partial class MainViewModel : ObservableObject
             Status = $"Error: {ex.Message}";
         }
     }
+
+    [RelayCommand]
+    public async Task LoadThumbnailsAsync()
+    {
+        if (SelectedGroup is null) return;
+
+        try
+        {
+            IsBusy = true;
+            Status = "Loading thumbnails...";
+
+            // ensure db exists
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            var positions = new[] { 20, 50, 80 };
+
+            // parallelism limit (don’t melt CPU/IO)
+            using var sem = new SemaphoreSlim(2);
+
+            var tasks = SelectedGroup.Members.Select(async m =>
+            {
+                await sem.WaitAsync();
+                try
+                {
+                    await LoadThumbsForMemberAsync(db, m, positions);
+                }
+                finally
+                {
+                    sem.Release();
+                }
+            }).ToList();
+
+            await Task.WhenAll(tasks);
+
+            Status = "Thumbnails loaded.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task LoadThumbsForMemberAsync(AppDb db, MemberVm m, int[] positions)
+    {
+        // guard
+        if (m.DurationSec is null || m.DurationSec <= 1.0) return;
+        if (string.IsNullOrWhiteSpace(m.Path) || !File.Exists(m.Path)) return;
+
+        await Dispatcher.UIThread.InvokeAsync(() => m.ThumbsLoading = true);
+
+        try
+        {
+            foreach (var pos in positions)
+            {
+                var key = (m.MediaId, pos);
+
+                if (_thumbCache.TryGetValue(key, out var cached))
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() => SetThumb(m, pos, cached));
+                    continue;
+                }
+
+                // timestamp
+                var ts = m.DurationSec.Value * (pos / 100.0);
+
+                byte[] png;
+                try
+                {
+                    png = await _extractor.ExtractFramePngAsync(m.Path, ts, CancellationToken.None);
+                }
+                catch
+                {
+                    // silently skip single-frame failures
+                    continue;
+                }
+
+                // create Bitmap from PNG bytes
+                Bitmap bmp;
+                await using (var ms = new MemoryStream(png))
+                    bmp = new Bitmap(ms);
+
+                _thumbCache[key] = bmp;
+
+                await Dispatcher.UIThread.InvokeAsync(() => SetThumb(m, pos, bmp));
+            }
+        }
+        finally
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => m.ThumbsLoading = false);
+        }
+    }
+
+    private static void SetThumb(MemberVm m, int pos, Bitmap bmp)
+    {
+        switch (pos)
+        {
+            case 20: m.Thumb20 = bmp; break;
+            case 50: m.Thumb50 = bmp; break;
+            case 80: m.Thumb80 = bmp; break;
+        }
+    }
 }
 
 public partial class GroupVm : ObservableObject
@@ -140,6 +259,11 @@ public partial class MemberVm : ObservableObject
     public double AvgDist { get; }
 
     public AppDb.MediaFileRow File { get; }
+
+    [ObservableProperty] private Bitmap? thumb20;
+    [ObservableProperty] private Bitmap? thumb50;
+    [ObservableProperty] private Bitmap? thumb80;
+    [ObservableProperty] private bool thumbsLoading;
 
     public MemberVm(AppDb.MediaFileRow file, double avgDist)
     {
