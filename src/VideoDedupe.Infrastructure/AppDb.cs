@@ -32,6 +32,8 @@ namespace VideoDedupe.Infrastructure
             public string Path { get; set; } = "";
             public long IsEnabled { get; set; }
             public string AddedUtc { get; set; } = "";
+            public long IncludeSubdirs { get; init; } = 1;
+            public string? ExcludeGlob { get; init; }
         }
 
         public sealed class MediaFileRow
@@ -73,24 +75,38 @@ ON CONFLICT(Path) DO UPDATE SET
             var normalized = Normalize(path);
             using var cn = Open();
 
-            await cn.ExecuteAsync(
-                "INSERT OR IGNORE INTO ScanRoot(Path, IsEnabled, AddedUtc) VALUES (@Path, 1, @Utc)",
-                new
-                {
-                    Path = normalized,
-                    Utc = DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture)
-                });
+            await cn.ExecuteAsync(@"
+INSERT INTO ScanRoot(Path, IsEnabled, AddedUtc, IncludeSubdirs, ExcludeText)
+VALUES (@Path, 1, @Utc, 1, NULL);
+", new
+            {
+                Path = path,
+                Utc = DateTime.UtcNow.ToString("O")
+            });
 
             return await cn.ExecuteScalarAsync<long>(
                 "SELECT Id FROM ScanRoot WHERE Path = @Path",
                 new { Path = normalized });
         }
-
+        public async Task UpdateScanRootOptionsAsync(long id, bool includeSubdirs, string? excludeText)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(@"
+UPDATE ScanRoot
+SET IncludeSubdirs = @Inc,
+    ExcludeText = @Ex
+WHERE Id = @Id;
+", new
+            {
+                Id = id,
+                Inc = includeSubdirs ? 1 : 0,
+                Ex = string.IsNullOrWhiteSpace(excludeText) ? null : excludeText
+            });
+        }
         public async Task<List<ScanRootRow>> ListScanRootsAsync()
         {
             using var cn = Open();
-            var rows = await cn.QueryAsync<ScanRootRow>(
-                "SELECT Id, Path, IsEnabled, AddedUtc FROM ScanRoot ORDER BY Id");
+            var rows = await cn.QueryAsync<ScanRootRow>("SELECT * FROM ScanRoot ORDER BY Id;");
             return rows.ToList();
         }
 

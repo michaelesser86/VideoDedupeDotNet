@@ -12,6 +12,8 @@ public static class DbInitializer
             Path TEXT NOT NULL UNIQUE,
             IsEnabled INTEGER NOT NULL DEFAULT 1,
             AddedUtc TEXT NOT NULL
+            IncludeSubdirs INTEGER NOT NULL DEFAULT 1
+            ExcludeGlob TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS MediaFile (
