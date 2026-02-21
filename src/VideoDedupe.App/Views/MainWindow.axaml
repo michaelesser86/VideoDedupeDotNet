@@ -131,7 +131,19 @@
                         CornerRadius="10"
                         Background="#1E1E1E"
                         DoubleTapped="Member_DoubleTapped">
-
+                  <Border.ContextMenu>
+                    <ContextMenu>
+                      <MenuItem Header="Open"
+                                Command="{Binding $parent[Window].DataContext.OpenFileCommand}"
+                                CommandParameter="{Binding .}" />
+                      <MenuItem Header="Show in Explorer"
+                                Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}"
+                                CommandParameter="{Binding .}" />
+                      <MenuItem Header="Copy Path"
+                                Command="{Binding $parent[Window].DataContext.CopyPathCommand}"
+                                CommandParameter="{Binding .}" />
+                    </ContextMenu>
+                  </Border.ContextMenu>
                   <StackPanel Spacing="6">
 
                     <!-- BEST marker -->
@@ -187,18 +199,7 @@
                       <TextBlock Foreground="#CFCFCF"
                                  Text="{Binding VideoCodec}"/>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                      <Button Content="Open"
-                              Command="{Binding $parent[Window].DataContext.OpenFileCommand}"
-                              CommandParameter="{Binding .}" />
-
-                      <Button Content="Show in Explorer"
-                              Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}"
-                              CommandParameter="{Binding .}" />
-                      <Button Content="Copy Path"
-                              Command="{Binding $parent[Window].DataContext.CopyPathCommand}"
-                              CommandParameter="{Binding .}" />
-                    </StackPanel>
+                   
                     <StackPanel Orientation="Horizontal" Spacing="10">
                       <Button Content="Keep"
                               Command="{Binding $parent[Window].DataContext.MarkKeepCommand}"
