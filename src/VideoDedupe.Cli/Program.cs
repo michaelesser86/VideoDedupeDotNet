@@ -94,16 +94,24 @@ switch (cmd)
 
                 Console.WriteLine($"Indexing root: {r.Path}");
 
-                foreach (var file in Directory.EnumerateFiles(r.Path, "*.mp4", SearchOption.AllDirectories))
+                var opt = r.IncludeSubdirs == 1
+     ? SearchOption.AllDirectories
+     : SearchOption.TopDirectoryOnly;
+
+                foreach (var file in Directory.EnumerateFiles(r.Path, "*.mp4", opt))
                 {
+                    // ExcludeText: MVP = ";"-getrennte Tokens, "contains" match
+                    if (IsExcluded(file, r.ExcludeText))
+                        continue;
+
                     try
                     {
                         var full = Path.GetFullPath(file);
                         var fi = new FileInfo(full);
 
-                        // store as ISO-8601
                         var modifiedUtc = fi.LastWriteTimeUtc.ToString("O");
                         var scannedUtc = DateTime.UtcNow.ToString("O");
+
                         FfprobeService.ProbeResult meta;
                         try
                         {
@@ -114,6 +122,7 @@ switch (cmd)
                             Console.WriteLine($"ffprobe failed: {full} :: {ex.Message}");
                             meta = new FfprobeService.ProbeResult(null, null, null, null, null, null);
                         }
+
                         await db.UpsertMediaFileAsync(new AppDb.MediaFileRow
                         {
                             Path = full,
@@ -663,5 +672,23 @@ switch (cmd)
         {
             Console.WriteLine("Unknown command.");
             break;
+        }
+
+
+        static bool IsExcluded(string path, string? excludeText)
+        {
+            if (string.IsNullOrWhiteSpace(excludeText))
+                return false;
+
+            var tokens = excludeText.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            foreach (var t in tokens)
+            {
+                // MVP-Regel: wenn Pfad den Token enthält → skip
+                if (t.Length > 0 && path.Contains(t, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
         }
 }
