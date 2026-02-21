@@ -43,9 +43,21 @@ public partial class MainViewModel : ObservableObject
     private readonly FfmpegTools _tools = new();
     private readonly FfmpegFrameExtractor _extractor;
     private readonly Dictionary<(long MediaId, int Pos), Bitmap> _thumbCache = new();
+    [ObservableProperty] private bool isIndexing;
+    [ObservableProperty] private int indexDiscovered;
+    [ObservableProperty] private int indexProcessed;
+    [ObservableProperty] private int indexOk;
+    [ObservableProperty] private int indexFail;
+    [ObservableProperty] private string indexCurrent = "";
 
+    public double IndexPercent => IndexDiscovered <= 0 ? 0 : (double)IndexProcessed / IndexDiscovered;
+
+    private CancellationTokenSource? _indexCts;
     partial void OnGroupFilterChanged(string value) => RefreshGroupView();
     partial void OnGroupSortChanged(string value) => RefreshGroupView();
+
+    partial void OnIndexDiscoveredChanged(int value) => OnPropertyChanged(nameof(IndexPercent));
+    partial void OnIndexProcessedChanged(int value) => OnPropertyChanged(nameof(IndexPercent));
     public MainViewModel()
     {
         _extractor = new FfmpegFrameExtractor(_tools);
@@ -233,21 +245,65 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
+    public void CancelScanIndex()
+    {
+        _indexCts?.Cancel();
+    }
+
+    [RelayCommand]
     public async Task RunScanIndexAsync()
     {
+        if (IsIndexing) return;
+
         try
         {
             IsBusy = true;
-            Status = "Running scan-index...";
-            await RunCliAsync($"scan-index --db=\"{DbPath}\"");
-            Status = "scan-index finished.";
+            IsIndexing = true;
+
+            IndexDiscovered = 0;
+            IndexProcessed = 0;
+            IndexOk = 0;
+            IndexFail = 0;
+            IndexCurrent = "";
+            Status = "Indexing...";
+
+            _indexCts?.Cancel();
+            _indexCts?.Dispose();
+            _indexCts = new CancellationTokenSource();
+            var ct = _indexCts.Token;
+
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            var tools = new FfmpegTools();
+            var probe = new FfprobeService(tools);
+            var svc = new IndexService(db, probe);
+
+            var prog = new Progress<IndexProgress>(p =>
+            {
+                IndexDiscovered = p.Discovered;
+                IndexProcessed = p.Processed;
+                IndexOk = p.ProbedOk;
+                IndexFail = p.ProbedFail;
+                IndexCurrent = p.CurrentPath ?? "";
+            });
+
+            await svc.RunAsync(prog, ct);
+
+            Status = $"Index done. Files={IndexDiscovered}, ok={IndexOk}, fail={IndexFail}";
+            await LoadRootsAsync(); // optional refresh
+        }
+        catch (OperationCanceledException)
+        {
+            Status = "Index canceled.";
         }
         catch (Exception ex)
         {
-            Status = $"Error: {ex.Message}";
+            Status = $"Index error: {ex.Message}";
         }
         finally
         {
+            IsIndexing = false;
             IsBusy = false;
         }
     }
