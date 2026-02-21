@@ -46,6 +46,9 @@
           <Button Content="Scan Index"
                   Command="{Binding RunScanIndexCommand}"
                   IsEnabled="{Binding !IsBusy}"/>
+          <Button Content="Cancel"
+        Command="{Binding CancelScanIndexCommand}"
+        IsVisible="{Binding IsIndexing}"/>
 
           <Button Content="Dupe Build"
                   Command="{Binding RunDupeBuildCommand}"
@@ -61,6 +64,26 @@
                   Command="{Binding LoadGroupsCommand}"
                   IsEnabled="{Binding !IsBusy}"/>
         </WrapPanel>
+
+        <StackPanel Orientation="Vertical" Spacing="4" Margin="10,0,0,0" Width="420">
+          <ProgressBar Minimum="0"
+                       Maximum="1"
+                       Height="8"
+                       Value="{Binding IndexPercent}"
+                       IsVisible="{Binding IsIndexing}"/>
+
+          <TextBlock Opacity="0.85"
+            IsVisible="{Binding IsIndexing}">
+            <TextBlock.Text>
+              <MultiBinding StringFormat="{}{0}/{1}  ok={2} fail={3}">
+                <Binding Path="IndexProcessed"/>
+                <Binding Path="IndexDiscovered"/>
+                <Binding Path="IndexOk"/>
+                <Binding Path="IndexFail"/>
+              </MultiBinding>
+            </TextBlock.Text>
+          </TextBlock>
+        </StackPanel>
 
         <!-- Right: status -->
         <TextBlock DockPanel.Dock="Right"
