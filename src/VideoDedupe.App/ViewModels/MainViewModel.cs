@@ -37,7 +37,7 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty] private string quarantineRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "VideoDedupe_Quarantine");
 
-
+    [ObservableProperty] private string newRootPath = "";
     private CancellationTokenSource? _thumbCts;
 
     private readonly FfmpegTools _tools = new();
@@ -75,7 +75,40 @@ public partial class MainViewModel : ObservableObject
             catch (OperationCanceledException) { }
         });
     }
+    [RelayCommand]
+    public async Task AddRootFromTextAsync()
+    {
+        try
+        {
+            var path = (NewRootPath ?? "").Trim().Trim('"');
 
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                Status = "Please enter a folder path.";
+                return;
+            }
+
+            if (!Directory.Exists(path))
+            {
+                Status = $"Folder does not exist: {path}";
+                return;
+            }
+
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            await db.AddScanRootAsync(path);
+
+            Status = $"Added root: {path}";
+            NewRootPath = "";
+
+            await LoadRootsAsync();
+        }
+        catch (Exception ex)
+        {
+            Status = $"AddRootFromText failed: {ex.Message}";
+        }
+    }
     [RelayCommand]
     public async Task PickDbAsync()
     {
@@ -322,37 +355,60 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
+            Status = "AddRoot: starting...";
+
             var lifetime = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
-            var topLevel = lifetime?.MainWindow is null ? null : TopLevel.GetTopLevel(lifetime.MainWindow);
-            if (topLevel is null)
+            if (lifetime?.MainWindow == null)
             {
-                Status = "No UI context available.";
+                Status = "AddRoot: MainWindow is null.";
                 return;
             }
 
-            var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            var topLevel = TopLevel.GetTopLevel(lifetime.MainWindow);
+            if (topLevel == null)
             {
-                Title = "Add scan root",
+                Status = "AddRoot: TopLevel is null.";
+                return;
+            }
+
+            Status = "AddRoot: opening folder picker...";
+
+            var result = await topLevel.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Select folder to scan",
                 AllowMultiple = false
             });
 
-            if (folders.Count == 0) return;
+            Status = $"AddRoot: picker returned {result.Count} item(s).";
 
-            var path = folders[0].Path.LocalPath;
+            if (result.Count == 0)
+                return;
+
+            var item = result[0];
+
+            // show raw values
+            var rawPath = item.Path.ToString();
+            var localPath = item.TryGetLocalPath();
+
+            Status = $"AddRoot: raw={rawPath} local={localPath}";
+
+            if (string.IsNullOrWhiteSpace(localPath))
+                return;
 
             var db = new AppDb(DbPath);
             await DbInitializer.EnsureCreatedAsync(db);
 
-            await db.AddScanRootAsync(path);
+            await db.AddScanRootAsync(localPath);
 
+            Status = $"AddRoot: added to DB. Reloading roots...";
             await LoadRootsAsync();
+            Status = $"AddRoot: done. Roots={Roots.Count}";
         }
         catch (Exception ex)
         {
-            Status = $"Error: {ex.Message}";
+            Status = $"AddRoot failed: {ex}";
         }
     }
-
     [RelayCommand]
     public async Task LoadRootsAsync()
     {
@@ -380,7 +436,7 @@ public partial class MainViewModel : ObservableObject
             }
 
             SelectedRoot = Roots.FirstOrDefault();
-            Status = $"Loaded {Roots.Count} roots.";
+            Status = $"Loaded {Roots.Count} roots. DB={Path.GetFullPath(DbPath)}";
         }
         catch (Exception ex)
         {

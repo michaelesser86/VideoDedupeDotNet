@@ -28,6 +28,9 @@ public static class DbInitializer
 
            ");
 
+        try { await db.ExecuteAsync("ALTER TABLE ScanRoot ADD COLUMN IncludeSubdirs INTEGER NOT NULL DEFAULT 1;"); } catch { }
+        try { await db.ExecuteAsync("ALTER TABLE ScanRoot ADD COLUMN ExcludeText TEXT NULL;"); } catch { }
+
         await db.ExecuteAsync(@"
             CREATE TABLE IF NOT EXISTS FrameHash (
             MediaFileId INTEGER NOT NULL,
