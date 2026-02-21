@@ -171,6 +171,77 @@ public partial class MainViewModel : ObservableObject
 
         await LoadThumbnailsInternalAsync(_thumbCts.Token);
     }
+    private async Task RunCliAsync(string args)
+    {
+        // args example: "scan-index --db=videodedupe.db"
+        var psi = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments = $"run --project \"{Path.GetFullPath("src/VideoDedupe.Cli")}\" -- {args}",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        using var p = Process.Start(psi)!;
+
+        // simple: read all
+        var stdout = await p.StandardOutput.ReadToEndAsync();
+        var stderr = await p.StandardError.ReadToEndAsync();
+        await p.WaitForExitAsync();
+
+        if (p.ExitCode != 0)
+            throw new Exception($"CLI failed: {stderr}");
+
+        // show last line
+        var last = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        Status = last ?? "Done.";
+    }
+
+    [RelayCommand]
+    public async Task RunScanIndexAsync()
+    {
+        try
+        {
+            IsBusy = true;
+            Status = "Running scan-index...";
+            await RunCliAsync($"scan-index --db=\"{DbPath}\"");
+            Status = "scan-index finished.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    public async Task RunDupeBuildAsync()
+    {
+        try
+        {
+            IsBusy = true;
+            Status = "Running dupe-build...";
+            await RunCliAsync($"dupe-build --db=\"{DbPath}\" --clear=true");
+            Status = "dupe-build finished.";
+
+            // refresh groups in UI
+            await LoadGroupsAsync();
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     [RelayCommand]
     public async Task SaveRootOptionsAsync()
     {
