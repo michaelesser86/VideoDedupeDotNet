@@ -30,7 +30,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string groupSort = "SizeDesc"; // SizeDesc | Newest
     public ObservableCollection<GroupVm> Groups { get; } = new();
     public ObservableCollection<GroupVm> FilteredGroups { get; } = new();
+    public ObservableCollection<RootVm> Roots { get; } = new();
 
+    [ObservableProperty] private RootVm? selectedRoot;
     [ObservableProperty] private GroupVm? selectedGroup;
 
     [ObservableProperty] private string quarantineRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "VideoDedupe_Quarantine");
@@ -169,7 +171,103 @@ public partial class MainViewModel : ObservableObject
 
         await LoadThumbnailsInternalAsync(_thumbCts.Token);
     }
+    [RelayCommand]
+    public async Task SaveRootOptionsAsync()
+    {
+        if (SelectedRoot is null) return;
 
+        try
+        {
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            await db.UpdateScanRootOptionsAsync(
+                SelectedRoot.Id,
+                SelectedRoot.IncludeSubdirs,
+                SelectedRoot.ExcludeText);
+
+            Status = "Root options saved.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    public async Task AddRootAsync()
+    {
+        try
+        {
+            var lifetime = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
+            var topLevel = lifetime?.MainWindow is null ? null : TopLevel.GetTopLevel(lifetime.MainWindow);
+            if (topLevel is null)
+            {
+                Status = "No UI context available.";
+                return;
+            }
+
+            var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Add scan root",
+                AllowMultiple = false
+            });
+
+            if (folders.Count == 0) return;
+
+            var path = folders[0].Path.LocalPath;
+
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            await db.AddScanRootAsync(path);
+
+            await LoadRootsAsync();
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    public async Task LoadRootsAsync()
+    {
+        try
+        {
+            IsBusy = true;
+            Status = "Loading roots...";
+
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            var roots = await db.ListScanRootsAsync();
+
+            Roots.Clear();
+            foreach (var r in roots)
+            {
+                Roots.Add(new RootVm
+                {
+                    Id = r.Id,
+                    Path = r.Path,
+                    IsEnabled = r.IsEnabled == 1,
+                    IncludeSubdirs = r.IncludeSubdirs == 1,
+                    ExcludeText = r.ExcludeText
+                });
+            }
+
+            SelectedRoot = Roots.FirstOrDefault();
+            Status = $"Loaded {Roots.Count} roots.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
     private async Task LoadThumbnailsInternalAsync(CancellationToken ct)
     {
         if (SelectedGroup is null) return;
@@ -542,4 +640,15 @@ public partial class MemberVm : ObservableObject
         File = file;
         AvgDist = avgDist;
     }
+
+
+}
+public partial class RootVm : ObservableObject
+{
+    public long Id { get; init; }
+    public string Path { get; init; } = "";
+
+    [ObservableProperty] private bool isEnabled;
+    [ObservableProperty] private bool includeSubdirs = true;
+    [ObservableProperty] private string? excludeText;
 }

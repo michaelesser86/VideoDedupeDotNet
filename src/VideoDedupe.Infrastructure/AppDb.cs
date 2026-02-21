@@ -33,7 +33,7 @@ namespace VideoDedupe.Infrastructure
             public long IsEnabled { get; set; }
             public string AddedUtc { get; set; } = "";
             public long IncludeSubdirs { get; init; } = 1;
-            public string? ExcludeGlob { get; init; }
+            public string? ExcludeText { get; init; }
         }
 
         public sealed class MediaFileRow
