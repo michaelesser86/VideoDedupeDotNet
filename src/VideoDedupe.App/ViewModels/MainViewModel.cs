@@ -220,6 +220,58 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
+    public async Task SaveRootEnabledAsync()
+    {
+        try
+        {
+            IsBusy = true;
+
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            foreach (var r in Roots)
+                await db.SetScanRootEnabledAsync(r.Id, r.IsEnabled);
+
+            Status = "Enabled flags saved.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    public async Task RemoveSelectedRootAsync()
+    {
+        if (SelectedRoot is null) return;
+
+        try
+        {
+            IsBusy = true;
+
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            await db.DeleteScanRootAsync(SelectedRoot.Id);
+
+            await LoadRootsAsync();
+            Status = "Root removed.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
     public async Task RunDupeBuildAsync()
     {
         try
