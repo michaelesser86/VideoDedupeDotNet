@@ -97,6 +97,12 @@
             <Button Content="Save Options"
                     Command="{Binding SaveRootOptionsCommand}"
                     IsEnabled="{Binding !IsBusy}"/>
+            <Button Content="Save Enabled"
+                    Command="{Binding SaveRootEnabledCommand}"
+                    IsEnabled="{Binding !IsBusy}"/>
+            <Button Content="Remove Root"
+                    Command="{Binding RemoveSelectedRootCommand}"
+                    IsEnabled="{Binding SelectedRoot}"/>
           </StackPanel>
 
           <!-- Roots list -->
