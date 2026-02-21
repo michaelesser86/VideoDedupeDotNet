@@ -25,6 +25,19 @@ namespace VideoDedupe.Infrastructure
             using var cn = Open();
             await cn.ExecuteAsync(sql, args);
         }
+        public async Task DeleteScanRootAsync(long id)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync("DELETE FROM ScanRoot WHERE Id=@Id;", new { Id = id });
+        }
+
+        public async Task SetScanRootEnabledAsync(long id, bool enabled)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(
+                "UPDATE ScanRoot SET IsEnabled=@E WHERE Id=@Id;",
+                new { Id = id, E = enabled ? 1 : 0 });
+        }
 
         public sealed class ScanRootRow
         {
