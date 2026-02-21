@@ -70,9 +70,18 @@
                    FontSize="16"
                    Text="Duplicate Groups"
                    Margin="0,0,0,8"/>
-
+        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+          <TextBox Width="220"
+                   Watermark="Filter (path contains...)"
+                   Text="{Binding GroupFilter}"/>
+          <ComboBox Width="120"
+                    SelectedItem="{Binding GroupSort}">
+            <ComboBoxItem Content="SizeDesc"/>
+            <ComboBoxItem Content="Newest"/>
+          </ComboBox>
+        </StackPanel>
         <ListBox Grid.Row="1"
-                 ItemsSource="{Binding Groups}"
+                 ItemsSource="{Binding FilteredGroups}"
                  SelectedItem="{Binding SelectedGroup}">
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="vm:GroupVm">

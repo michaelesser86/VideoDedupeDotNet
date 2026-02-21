@@ -25,8 +25,10 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string dbPath = "videodedupe.db";
     [ObservableProperty] private bool isBusy;
     [ObservableProperty] private string status = "";
-
+    [ObservableProperty] private string groupFilter = "";
+    [ObservableProperty] private string groupSort = "SizeDesc"; // SizeDesc | Newest
     public ObservableCollection<GroupVm> Groups { get; } = new();
+    public ObservableCollection<GroupVm> FilteredGroups { get; } = new();
 
     [ObservableProperty] private GroupVm? selectedGroup;
 
@@ -39,6 +41,8 @@ public partial class MainViewModel : ObservableObject
     private readonly FfmpegFrameExtractor _extractor;
     private readonly Dictionary<(long MediaId, int Pos), Bitmap> _thumbCache = new();
 
+    partial void OnGroupFilterChanged(string value) => RefreshGroupView();
+    partial void OnGroupSortChanged(string value) => RefreshGroupView();
     public MainViewModel()
     {
         _extractor = new FfmpegFrameExtractor(_tools);
@@ -142,8 +146,7 @@ public partial class MainViewModel : ObservableObject
 
                 Groups.Add(gvm);
             }
-
-            SelectedGroup = Groups.FirstOrDefault();
+            RefreshGroupView();
             Status = $"Loaded {Groups.Count} groups.";
         }
         catch (Exception ex)
@@ -273,6 +276,34 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    private void RefreshGroupView()
+    {
+        IEnumerable<GroupVm> q = Groups;
+
+        // sort
+        q = GroupSort switch
+        {
+            "Newest" => q.OrderByDescending(g => g.GroupId), // Id steigt mit Zeit
+            _ => q.OrderByDescending(g => g.Members.Count)   // SizeDesc
+        };
+
+        // filter (match in any member path)
+        var f = (GroupFilter ?? "").Trim();
+        if (f.Length > 0)
+        {
+            q = q.Where(g =>
+                g.Members.Any(m =>
+                    m.Path.Contains(f, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        FilteredGroups.Clear();
+        foreach (var g in q)
+            FilteredGroups.Add(g);
+
+        // keep selection valid
+        if (SelectedGroup is null || !FilteredGroups.Contains(SelectedGroup))
+            SelectedGroup = FilteredGroups.FirstOrDefault();
+    }
     private static void SetThumb(MemberVm m, int pos, Bitmap bmp)
     {
         switch (pos)
