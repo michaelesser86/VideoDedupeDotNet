@@ -69,89 +69,23 @@ switch (cmd)
 
     case "scan-index":
         {
-            var roots = await db.ListScanRootsAsync();
-            var enabled = roots.Where(r => r.IsEnabled == 1).ToList();
-
-            if (enabled.Count == 0)
-            {
-                Console.WriteLine("No enabled scan roots. Add one with roots-add or toggle one on.");
-                return;
-            }
-
-            int indexed = 0;
-            int skipped = 0;
-
             var tools = new FfmpegTools();
             var probe = new FfprobeService(tools);
+            var svc = new IndexService(db, probe);
 
-            foreach (var r in enabled)
+            var progress = new Progress<IndexProgress>(p =>
             {
-                if (!Directory.Exists(r.Path))
-                {
-                    Console.WriteLine($"Missing root: {r.Path}");
-                    continue;
-                }
+                if (p.Processed % 100 == 0)
+                    Console.WriteLine($"Indexed {p.Processed}/{p.Discovered} ok={p.ProbedOk} fail={p.ProbedFail}");
+            });
 
-                Console.WriteLine($"Indexing root: {r.Path}");
+            await svc.RunAsync(progress, CancellationToken.None);
 
-                var opt = r.IncludeSubdirs == 1
-     ? SearchOption.AllDirectories
-     : SearchOption.TopDirectoryOnly;
-
-                foreach (var file in Directory.EnumerateFiles(r.Path, "*.mp4", opt))
-                {
-                    // ExcludeText: MVP = ";"-getrennte Tokens, "contains" match
-                    if (IsExcluded(file, r.ExcludeText))
-                        continue;
-
-                    try
-                    {
-                        var full = Path.GetFullPath(file);
-                        var fi = new FileInfo(full);
-
-                        var modifiedUtc = fi.LastWriteTimeUtc.ToString("O");
-                        var scannedUtc = DateTime.UtcNow.ToString("O");
-
-                        FfprobeService.ProbeResult meta;
-                        try
-                        {
-                            meta = await probe.ProbeAsync(full, CancellationToken.None);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"ffprobe failed: {full} :: {ex.Message}");
-                            meta = new FfprobeService.ProbeResult(null, null, null, null, null, null);
-                        }
-
-                        await db.UpsertMediaFileAsync(new AppDb.MediaFileRow
-                        {
-                            Path = full,
-                            SizeBytes = fi.Length,
-                            ModifiedUtc = modifiedUtc,
-                            LastScannedUtc = scannedUtc,
-                            DurationSec = meta.DurationSec,
-                            Width = meta.Width,
-                            Height = meta.Height,
-                            Fps = meta.Fps,
-                            VideoCodec = meta.VideoCodec,
-                            Container = meta.Container
-                        });
-
-                        indexed++;
-                        if (indexed % 250 == 0)
-                            Console.WriteLine($"Indexed {indexed} files...");
-                    }
-                    catch (Exception ex)
-                    {
-                        skipped++;
-                        Console.WriteLine($"Skip: {file} :: {ex.Message}");
-                    }
-                }
-            }
-
-            Console.WriteLine($"Done. Indexed={indexed}, Skipped={skipped}");
+            Console.WriteLine("Index finished.");
             break;
         }
+
+
     case "dupe-candidates":
         {
             // defaults
