@@ -474,6 +474,30 @@ public partial class MainViewModel : ObservableObject
             Status = $"Explorer failed: {ex.Message}";
         }
     }
+    [RelayCommand]
+    public async Task CopyPathAsync(MemberVm? m)
+    {
+        if (m is null) return;
+
+        try
+        {
+            var lifetime = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
+            var topLevel = lifetime?.MainWindow is null ? null : TopLevel.GetTopLevel(lifetime.MainWindow);
+
+            if (topLevel?.Clipboard is null)
+            {
+                Status = "Clipboard not available.";
+                return;
+            }
+
+            await topLevel.Clipboard.SetTextAsync(m.Path);
+            Status = "Path copied to clipboard.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Copy failed: {ex.Message}";
+        }
+    }
 }
 
 public partial class GroupVm : ObservableObject

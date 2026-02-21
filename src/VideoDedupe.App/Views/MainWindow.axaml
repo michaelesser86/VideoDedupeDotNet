@@ -129,7 +129,8 @@
                 <Border Padding="10"
                         Margin="0,0,0,10"
                         CornerRadius="10"
-                        Background="#1E1E1E">
+                        Background="#1E1E1E"
+                        DoubleTapped="Member_DoubleTapped">
 
                   <StackPanel Spacing="6">
 
@@ -193,6 +194,9 @@
 
                       <Button Content="Show in Explorer"
                               Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}"
+                              CommandParameter="{Binding .}" />
+                      <Button Content="Copy Path"
+                              Command="{Binding $parent[Window].DataContext.CopyPathCommand}"
                               CommandParameter="{Binding .}" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="10">
