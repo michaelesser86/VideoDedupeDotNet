@@ -27,7 +27,13 @@
         <TextBlock Foreground="White"
                    VerticalAlignment="Center"
                    Text="DB:"/>
+        <Button Content="Scan Index"
+                Command="{Binding RunScanIndexCommand}"
+                IsEnabled="{Binding !IsBusy}"/>
 
+        <Button Content="Dupe Build"
+                Command="{Binding RunDupeBuildCommand}"
+                IsEnabled="{Binding !IsBusy}"/>
         <TextBox Width="320"
                  Text="{Binding DbPath}"/>
 
