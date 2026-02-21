@@ -187,6 +187,15 @@
                                  Text="{Binding VideoCodec}"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="10">
+                      <Button Content="Open"
+                              Command="{Binding $parent[Window].DataContext.OpenFileCommand}"
+                              CommandParameter="{Binding .}" />
+
+                      <Button Content="Show in Explorer"
+                              Command="{Binding $parent[Window].DataContext.ShowInExplorerCommand}"
+                              CommandParameter="{Binding .}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
                       <Button Content="Keep"
                               Command="{Binding $parent[Window].DataContext.MarkKeepCommand}"
                               CommandParameter="{Binding .}" />

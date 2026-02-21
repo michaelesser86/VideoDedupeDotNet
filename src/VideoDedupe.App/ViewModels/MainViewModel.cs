@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -418,7 +419,61 @@ public partial class MainViewModel : ObservableObject
 
         Status = "Best marked KEEP, others suggested QUARANTINE.";
     }
+    [RelayCommand]
+    public void OpenFile(MemberVm? m)
+    {
+        if (m is null) return;
 
+        try
+        {
+            if (!File.Exists(m.Path))
+            {
+                Status = "File not found.";
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = m.Path,
+                UseShellExecute = true
+            });
+
+            Status = "Opened file.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Open failed: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    public void ShowInExplorer(MemberVm? m)
+    {
+        if (m is null) return;
+
+        try
+        {
+            if (!File.Exists(m.Path))
+            {
+                Status = "File not found.";
+                return;
+            }
+
+            // Windows: highlight file in Explorer
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"/select,\"{m.Path}\"",
+                UseShellExecute = true
+            });
+
+            Status = "Opened Explorer.";
+        }
+        catch (Exception ex)
+        {
+            Status = $"Explorer failed: {ex.Message}";
+        }
+    }
 }
 
 public partial class GroupVm : ObservableObject
