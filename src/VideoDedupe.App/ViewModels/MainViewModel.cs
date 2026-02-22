@@ -54,6 +54,12 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private int dupeTotal;
     [ObservableProperty] private int dupeDone;
     [ObservableProperty] private string dupeCurrent = "";
+    // Dupe-build settings (UI)
+    [ObservableProperty] private bool dupeClearExisting = true;
+    [ObservableProperty] private double dupeTolSec = 0.25;
+    [ObservableProperty] private int dupeMinItems = 2;
+    [ObservableProperty] private double dupeMaxAvgDist = 10.0;
+    [ObservableProperty] private string dupeFramesCsv = "20,50,80";
 
     public double DupePercent => DupeTotal <= 0 ? 0 : (double)DupeDone / DupeTotal;
 
@@ -99,6 +105,24 @@ public partial class MainViewModel : ObservableObject
             catch (OperationCanceledException) { }
         });
     }
+
+    private List<int> ParseFrames(string? csv)
+    {
+        if (string.IsNullOrWhiteSpace(csv))
+            return new List<int> { 20, 50, 80 };
+
+        var parsed = csv.Split(',')
+            .Select(s => s.Trim())
+            .Where(s => int.TryParse(s, out _))
+            .Select(int.Parse)
+            .Where(p => p > 0 && p < 100)
+            .Distinct()
+            .OrderBy(p => p)
+            .ToList();
+
+        return parsed.Count > 0 ? parsed : new List<int> { 20, 50, 80 };
+    }
+
     [RelayCommand]
     public async Task AddRootFromTextAsync()
     {
@@ -402,12 +426,14 @@ public partial class MainViewModel : ObservableObject
 
             var svc = new DupeBuildService(db, extractor, dhash);
 
-            // Nimm hier erstmal feste Defaults – später hängen wir UI-Settings dran
+            var frames = ParseFrames(DupeFramesCsv);
+
             var opt = new DupeBuildOptions(
-                ClearExisting: true,
-                TolSec: 0.5,
-                MaxAvgDist: 12,
-                FramePercents: new[] { 20, 50, 80 }
+                ClearExisting: DupeClearExisting,
+                TolSec: DupeTolSec,
+                MinItems: DupeMinItems,
+                MaxAvgDist: DupeMaxAvgDist,
+                FramePercents: frames
             );
 
             var prog = new Progress<DupeBuildProgress>(p =>
