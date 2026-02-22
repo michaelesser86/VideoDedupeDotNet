@@ -438,14 +438,29 @@
                                    Text="Loading thumbnails…"
                                    IsVisible="{Binding ThumbsLoading}"/>
 
-                        <WrapPanel ItemSpacing="14" LineSpacing="6">
-                          <TextBlock Opacity="0.85" Text="{Binding AvgDist, StringFormat=avgDist: {0:F1}}"/>
-                          <TextBlock Opacity="0.85" Text="{Binding Width}"/>
+                        <WrapPanel ItemSpacing="18" LineSpacing="6">
+
+                          <TextBlock Opacity="0.85"
+                                     Text="{Binding AvgDist, StringFormat=avgDist: {0:F1}}"/>
+
+                          <TextBlock Opacity="0.85"
+                                     Text="{Binding Width}"/>
                           <TextBlock Opacity="0.85" Text="x"/>
-                          <TextBlock Opacity="0.85" Text="{Binding Height}"/>
-                          <TextBlock Opacity="0.85" Text="{Binding DurationSec, StringFormat={}{0:F2}s}"/>
-                          <TextBlock Opacity="0.85" Text="{Binding SizeBytes, StringFormat={}{0} bytes}"/>
-                          <TextBlock Opacity="0.85" Text="{Binding VideoCodec}"/>
+                          <TextBlock Opacity="0.85"
+                                     Text="{Binding Height}"/>
+
+                          <TextBlock Opacity="0.85"
+                                     Text="{Binding DurationSec, StringFormat={}{0:F2}s}"/>
+
+                          <TextBlock Opacity="0.85"
+                                     Text="{Binding SizeMbText}"/>
+
+                          <TextBlock Opacity="0.85"
+                                     Text="{Binding CreatedLocalText}"/>
+
+                          <TextBlock Opacity="0.85"
+                                     Text="{Binding VideoCodec}"/>
+
                         </WrapPanel>
 
                         <WrapPanel ItemSpacing="10" LineSpacing="8">

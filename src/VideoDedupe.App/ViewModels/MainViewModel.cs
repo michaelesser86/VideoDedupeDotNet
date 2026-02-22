@@ -1031,7 +1031,30 @@ public partial class MemberVm : ObservableObject
         AvgDist = avgDist;
     }
 
+    public string SizeMbText
+    {
+        get
+        {
+            if (File.SizeBytes <= 0) return "-";
+            var mb = File.SizeBytes / (1024.0 * 1024.0);
+            return $"{mb:F2} MB";
+        }
+    }
 
+    public string CreatedLocalText
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(File.ModifiedUtc))
+                return "-";
+
+            if (!DateTime.TryParse(File.ModifiedUtc, out var utc))
+                return File.ModifiedUtc;
+
+            var local = utc.ToLocalTime();
+            return local.ToString("dd.MM.yyyy HH:mm");
+        }
+    }
 }
 public partial class RootVm : ObservableObject
 {
