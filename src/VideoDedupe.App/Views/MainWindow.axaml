@@ -3,156 +3,136 @@
         xmlns:vm="clr-namespace:VideoDedupe.App.ViewModels"
         x:Class="VideoDedupe.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
-        Width="1320"
-        Height="820"
-        MinWidth="1100"
-        MinHeight="700"
+        Width="1440"
+        Height="880"
+        MinWidth="1200"
+        MinHeight="720"
         Title="VideoDedupe">
 
   <Window.DataContext>
     <vm:MainViewModel/>
   </Window.DataContext>
 
-  <!-- Root layout -->
   <Grid RowDefinitions="Auto,*"
         Margin="14"
         RowSpacing="12">
 
-    <!-- Top Bar -->
-    <Border Grid.Row="0"
-            CornerRadius="12"
-            Padding="12">
-      <DockPanel LastChildFill="True">
+    <!-- ===================== TOP BAR ===================== -->
+    <Border Grid.Row="0" CornerRadius="12" Padding="12">
+      <Grid ColumnDefinitions="*,520"
+            ColumnSpacing="14">
 
-        <!-- Left: DB + actions -->
-        <WrapPanel DockPanel.Dock="Left"
-                   VerticalAlignment="Center"
-                   HorizontalAlignment="Left"
-                   ItemSpacing="10">
+        <!-- Left: DB + Actions -->
+        <StackPanel Grid.Column="0" Spacing="10">
 
-          <TextBlock VerticalAlignment="Center"
-                     FontWeight="SemiBold"
-                     Text="Database:"/>
+          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+            <TextBlock VerticalAlignment="Center"
+                       FontWeight="SemiBold"
+                       Text="Database"/>
+            <TextBox Grid.Column="1"
+                     MinWidth="520"
+                     Text="{Binding DbPath}"/>
+            <Button Grid.Column="2"
+                    Content="Pick DB…"
+                    Command="{Binding PickDbCommand}"
+                    IsEnabled="{Binding !IsBusy}"/>
+          </Grid>
 
-          <TextBox Width="420"
-                   Text="{Binding DbPath}"/>
+          <WrapPanel ItemSpacing="10" LineSpacing="8">
+            <Button Content="Load Roots"
+                    Command="{Binding LoadRootsCommand}"
+                    IsEnabled="{Binding !IsBusy}"/>
+            <Button Content="Load Groups"
+                    Command="{Binding LoadGroupsCommand}"
+                    IsEnabled="{Binding !IsBusy}"/>
 
-          <Button Content="Pick DB…"
-                  Command="{Binding PickDbCommand}"
-                  IsEnabled="{Binding !IsBusy}"/>
+            <Separator Width="10"/>
 
-          <Separator Width="10"/>
+            <Button Content="Scan Index"
+                    Command="{Binding RunScanIndexCommand}"
+                    IsEnabled="{Binding !IsBusy}"/>
+            <Button Content="Cancel Index"
+                    Command="{Binding CancelScanIndexCommand}"
+                    IsVisible="{Binding IsIndexing}"/>
 
-          <Button Content="Scan Index"
-                  Command="{Binding RunScanIndexCommand}"
-                  IsEnabled="{Binding !IsBusy}"/>
-          <Button Content="Cancel"
-        Command="{Binding CancelScanIndexCommand}"
-        IsVisible="{Binding IsIndexing}"/>
+            <Separator Width="10"/>
 
-          <Button Content="Dupe Build"
-                  Command="{Binding RunDupeBuildCommand}"
-                  IsEnabled="{Binding !IsBusy}"/>
-          <Button Content="Cancel Build"
-                  Command="{Binding CancelDupeBuildCommand}"
-                  IsVisible="{Binding IsDupeBuilding}"/>
-          <Separator Width="10"/>
+            <Button Content="Dupe Build"
+                    Command="{Binding RunDupeBuildCommand}"
+                    IsEnabled="{Binding !IsBusy}"/>
+            <Button Content="Cancel Build"
+                    Command="{Binding CancelDupeBuildCommand}"
+                    IsVisible="{Binding IsDupeBuilding}"/>
+          </WrapPanel>
 
-          <Button Content="Load Roots"
-                  Command="{Binding LoadRootsCommand}"
-                  IsEnabled="{Binding !IsBusy}"/>
-
-          <Button Content="Load Groups"
-                  Command="{Binding LoadGroupsCommand}"
-                  IsEnabled="{Binding !IsBusy}"/>
-        </WrapPanel>
-        <Expander Header="Dupe Settings" IsExpanded="False" Width="520" Margin="10,0,0,0">
-          <StackPanel Spacing="8" Margin="0,8,0,0">
-
-            <CheckBox Content="Clear existing groups"
-                      IsChecked="{Binding DupeClearExisting}"/>
-
-            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="10">
-
-              <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="Tol (sec)"/>
-              <TextBox Grid.Row="0" Grid.Column="1" Width="140" Text="{Binding DupeTolSec}"/>
-
-              <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Text="Min items"/>
-              <TextBox Grid.Row="1" Grid.Column="1" Width="140" Text="{Binding DupeMinItems}"/>
-
-              <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Text="Max avg dist"/>
-              <TextBox Grid.Row="2" Grid.Column="1" Width="140" Text="{Binding DupeMaxAvgDist}"/>
-
-              <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Text="Frames (%)"/>
-              <TextBox Grid.Row="3" Grid.Column="1"
-                       Watermark="20,50,80"
-                       Text="{Binding DupeFramesCsv}"/>
-            </Grid>
-
-            <TextBlock Opacity="0.7"
-                       Text="Frames: comma-separated percents (1..99). Example: 20,50,80" />
-
-          </StackPanel>
-        </Expander>
-
-        <StackPanel Orientation="Vertical" Spacing="4" Margin="10,0,0,0" Width="420">
-          <ProgressBar Minimum="0"
-                       Maximum="1"
-                       Height="8"
-                       Value="{Binding IndexPercent}"
-                       IsVisible="{Binding IsIndexing}"/>
-
-          <TextBlock Opacity="0.85"
-            IsVisible="{Binding IsIndexing}">
-            <TextBlock.Text>
-              <MultiBinding StringFormat="{}{0}/{1}  ok={2} fail={3}">
-                <Binding Path="IndexProcessed"/>
-                <Binding Path="IndexDiscovered"/>
-                <Binding Path="IndexOk"/>
-                <Binding Path="IndexFail"/>
-              </MultiBinding>
-            </TextBlock.Text>
-          </TextBlock>
-        </StackPanel>
-        <StackPanel Orientation="Vertical" Spacing="4" Margin="10,0,0,0" Width="420">
-          <ProgressBar Minimum="0"
-                       Maximum="1"
-                       Height="8"
-                       Value="{Binding DupePercent}"
-                       IsVisible="{Binding IsDupeBuilding}"/>
-          <TextBlock Opacity="0.85"
-                     IsVisible="{Binding IsDupeBuilding}">
-            <TextBlock.Text>
-              <MultiBinding StringFormat="{}{0}: {1}/{2}  {3}">
-                <Binding Path="DupePhase"/>
-                <Binding Path="DupeDone"/>
-                <Binding Path="DupeTotal"/>
-                <Binding Path="DupeCurrent"/>
-              </MultiBinding>
-            </TextBlock.Text>
-          </TextBlock>
         </StackPanel>
 
-        <!-- Right: status -->
-        <TextBlock DockPanel.Dock="Right"
-                   VerticalAlignment="Center"
-                   TextAlignment="Right"
-                   TextTrimming="CharacterEllipsis"
-                   MaxWidth="420"
-                   Opacity="0.85"
-                   Text="{Binding Status}"/>
-      </DockPanel>
+        <!-- Right: Progress + Status -->
+        <StackPanel Grid.Column="1" Spacing="10">
+
+          <!-- Index progress -->
+          <Border CornerRadius="10" Padding="10" IsVisible="{Binding IsIndexing}">
+            <StackPanel Spacing="6">
+              <TextBlock FontWeight="SemiBold" Text="Indexing"/>
+              <ProgressBar Minimum="0" Maximum="1" Height="10" Value="{Binding IndexPercent}"/>
+              <TextBlock Opacity="0.85">
+                <TextBlock.Text>
+                  <MultiBinding StringFormat="{}{0}/{1}  ok={2} fail={3}">
+                    <Binding Path="IndexProcessed"/>
+                    <Binding Path="IndexDiscovered"/>
+                    <Binding Path="IndexOk"/>
+                    <Binding Path="IndexFail"/>
+                  </MultiBinding>
+                </TextBlock.Text>
+              </TextBlock>
+              <TextBlock Opacity="0.75"
+                         TextTrimming="CharacterEllipsis"
+                         Text="{Binding IndexCurrent}"/>
+            </StackPanel>
+          </Border>
+
+          <!-- Dupe progress -->
+          <Border CornerRadius="10" Padding="10" IsVisible="{Binding IsDupeBuilding}">
+            <StackPanel Spacing="6">
+              <TextBlock FontWeight="SemiBold" Text="Dupe Build"/>
+              <ProgressBar Minimum="0" Maximum="1" Height="10" Value="{Binding DupePercent}"/>
+              <TextBlock Opacity="0.85">
+                <TextBlock.Text>
+                  <MultiBinding StringFormat="{}{0}: {1}/{2}">
+                    <Binding Path="DupePhase"/>
+                    <Binding Path="DupeDone"/>
+                    <Binding Path="DupeTotal"/>
+                  </MultiBinding>
+                </TextBlock.Text>
+              </TextBlock>
+              <TextBlock Opacity="0.75"
+                         TextTrimming="CharacterEllipsis"
+                         Text="{Binding DupeCurrent}"/>
+            </StackPanel>
+          </Border>
+
+          <!-- Status -->
+          <Border CornerRadius="10" Padding="10">
+            <StackPanel Spacing="6">
+              <TextBlock FontWeight="SemiBold" Text="Status"/>
+              <TextBlock TextWrapping="Wrap"
+                         Opacity="0.85"
+                         Text="{Binding Status}"/>
+            </StackPanel>
+          </Border>
+
+        </StackPanel>
+
+      </Grid>
     </Border>
 
-    <!-- Main Content -->
+    <!-- ===================== MAIN CONTENT ===================== -->
     <Grid Grid.Row="1"
-          ColumnDefinitions="460,*"
+          ColumnDefinitions="540,8,*"
           ColumnSpacing="12">
 
-      <!-- LEFT PANE -->
-      <Border Grid.Column="0"
-              CornerRadius="12"
-              Padding="12">
+      <!--  LEFT PANE -->
+      <Border Grid.Column="0" CornerRadius="12" Padding="12">
         <Grid RowDefinitions="Auto,*"
               RowSpacing="10">
 
@@ -163,67 +143,50 @@
 
           <TabControl Grid.Row="1">
 
-            <!-- ROOTS TAB -->
+            <!-- ========== ROOTS TAB ========== -->
             <TabItem Header="Roots">
               <Grid RowDefinitions="Auto,Auto,*"
                     RowSpacing="10"
                     Margin="2">
 
-                <!-- Buttons -->
-                <WrapPanel Grid.Row="0"
-                           ItemSpacing="10">
-
+                <WrapPanel Grid.Row="0" ItemSpacing="10" LineSpacing="8">
                   <Button Content="Add Root…"
                           Command="{Binding AddRootCommand}"
                           IsEnabled="{Binding !IsBusy}"/>
-
                   <Button Content="Remove Selected"
                           Command="{Binding RemoveSelectedRootCommand}"
                           IsEnabled="{Binding SelectedRoot}"/>
-
                   <Button Content="Save Enabled"
                           Command="{Binding SaveRootEnabledCommand}"
                           IsEnabled="{Binding !IsBusy}"/>
-
                   <Button Content="Save Options"
                           Command="{Binding SaveRootOptionsCommand}"
                           IsEnabled="{Binding SelectedRoot}"/>
                 </WrapPanel>
 
-                <!-- Manual path add (keep it – very useful) -->
-                <WrapPanel Grid.Row="1"
-                           ItemSpacing="10">
-                  <TextBox Width="300"
+                <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                  <TextBox Grid.Column="0"
                            Watermark="Paste folder path (e.g. D:\Videos)"
                            Text="{Binding NewRootPath}"/>
-                  <Button Content="Add Path"
+                  <Button Grid.Column="1"
+                          Content="Add Path"
                           Command="{Binding AddRootFromTextCommand}"
                           IsEnabled="{Binding !IsBusy}"/>
-                </WrapPanel>
+                </Grid>
 
-                <!-- Roots list + details -->
                 <Grid Grid.Row="2"
                       ColumnDefinitions="*,*"
-                      ColumnSpacing="10">
+                      ColumnSpacing="12">
 
-                  <!-- list -->
-                  <Border Grid.Column="0"
-                          CornerRadius="10"
-                          Padding="8">
-                    <DockPanel LastChildFill="True">
-
-                      <TextBlock DockPanel.Dock="Top"
-                                 FontWeight="SemiBold"
-                                 Margin="0,0,0,6"
-                                 Text="Roots"/>
-
-                      <ScrollViewer VerticalScrollBarVisibility="Auto">
+                  <Border Grid.Column="0" CornerRadius="10" Padding="10">
+                    <Grid RowDefinitions="Auto,*" RowSpacing="8">
+                      <TextBlock Grid.Row="0" FontWeight="SemiBold" Text="Roots"/>
+                      <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                         <ListBox ItemsSource="{Binding Roots}"
                                  SelectedItem="{Binding SelectedRoot}">
                           <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:RootVm">
-                              <Grid ColumnDefinitions="Auto,*"
-                                    ColumnSpacing="8">
+                              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                 <CheckBox Grid.Column="0"
                                           VerticalAlignment="Center"
                                           IsChecked="{Binding IsEnabled}"/>
@@ -235,64 +198,128 @@
                           </ListBox.ItemTemplate>
                         </ListBox>
                       </ScrollViewer>
-
-                    </DockPanel>
+                    </Grid>
                   </Border>
 
-                  <!-- details -->
-                  <Border Grid.Column="1"
-                          CornerRadius="10"
-                          Padding="10">
-                    <StackPanel Spacing="10">
-                      <TextBlock FontWeight="SemiBold"
-                                 Text="Selected root"/>
+                  <Border Grid.Column="1" CornerRadius="10" Padding="10">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                      <StackPanel Spacing="10">
+                        <TextBlock FontWeight="SemiBold" Text="Selected root"/>
+                        <TextBlock Opacity="0.85"
+                                   TextWrapping="Wrap"
+                                   Text="{Binding SelectedRoot.Path}"/>
 
-                      <TextBlock Opacity="0.85"
-                                 TextWrapping="Wrap"
-                                 Text="{Binding SelectedRoot.Path}"/>
+                        <CheckBox Content="Include subfolders"
+                                  IsChecked="{Binding SelectedRoot.IncludeSubdirs}"/>
 
-                      <CheckBox Content="Include subfolders"
-                                IsChecked="{Binding SelectedRoot.IncludeSubdirs}"/>
+                        <TextBlock Opacity="0.75"
+                                   TextWrapping="Wrap"
+                                   Text="Exclude (MVP): semicolon separated tokens. Example: temp;cache;whatsapp"/>
 
-                      <TextBlock Opacity="0.85"
-                                 Text="Exclude (MVP): semicolon separated tokens. Example: temp;cache;whatsapp"/>
-
-                      <TextBox TextWrapping="Wrap"
-                               AcceptsReturn="True"
-                               MinHeight="72"
-                               Text="{Binding SelectedRoot.ExcludeText}"/>
-                    </StackPanel>
+                        <TextBox TextWrapping="Wrap"
+                                 AcceptsReturn="True"
+                                 MinHeight="90"
+                                 Text="{Binding SelectedRoot.ExcludeText}"/>
+                      </StackPanel>
+                    </ScrollViewer>
                   </Border>
 
                 </Grid>
               </Grid>
             </TabItem>
 
-            <!-- GROUPS TAB -->
+            <!-- ========== GROUPS TAB ========== -->
             <TabItem Header="Groups">
-              <Grid RowDefinitions="Auto,*"
+              <Grid RowDefinitions="Auto,Auto,*"
                     RowSpacing="10"
                     Margin="2">
 
+                <!-- Filter row -->
                 <Grid Grid.Row="0"
                       ColumnDefinitions="*,Auto"
                       ColumnSpacing="10">
-
                   <TextBox Grid.Column="0"
                            Watermark="Filter groups by path contains…"
                            Text="{Binding GroupFilter}"/>
-
                   <ComboBox Grid.Column="1"
-                            Width="160"
+                            Width="170"
                             SelectedItem="{Binding GroupSort}">
                     <ComboBoxItem Content="SizeDesc"/>
                     <ComboBoxItem Content="Newest"/>
                   </ComboBox>
                 </Grid>
 
-                <Border Grid.Row="1"
-                        CornerRadius="10"
-                        Padding="8">
+                <!-- Options expander -->
+                <Expander Grid.Row="1"
+                          Header="Dupe Options"
+                          IsExpanded="False">
+                  <Border CornerRadius="10" Padding="10" Margin="0,8,0,0">
+                    <StackPanel Spacing="10">
+
+                      <CheckBox Content="Clear existing groups"
+                                IsChecked="{Binding DupeClearExisting}"/>
+
+                      <!-- Tol -->
+                      <Grid ColumnDefinitions="Auto,* ,Auto" ColumnSpacing="12">
+                        <TextBlock VerticalAlignment="Center" Text="Tolerance (sec)"/>
+                        <Slider Grid.Column="1"
+                                Minimum="0.05"
+                                Maximum="2.00"
+                                Value="{Binding DupeTolSec}"
+                                TickFrequency="0.05"
+                                IsSnapToTickEnabled="False"/>
+                        <TextBlock Grid.Column="2"
+                                   VerticalAlignment="Center"
+                                   Opacity="0.85"
+                                   Text="{Binding DupeTolSec, StringFormat={}{0:F2}}"/>
+                      </Grid>
+
+                      <!-- Min items (uses DupeMinItemsDouble) -->
+                      <Grid ColumnDefinitions="Auto,* ,Auto" ColumnSpacing="12">
+                        <TextBlock VerticalAlignment="Center" Text="Min items"/>
+                        <Slider Grid.Column="1"
+                                Minimum="2"
+                                Maximum="10"
+                                Value="{Binding DupeMinItemsDouble}"
+                                TickFrequency="1"
+                                IsSnapToTickEnabled="True"/>
+                        <TextBlock Grid.Column="2"
+                                   VerticalAlignment="Center"
+                                   Opacity="0.85"
+                                   Text="{Binding DupeMinItems}"/>
+                      </Grid>
+
+                      <!-- MaxAvgDist -->
+                      <Grid ColumnDefinitions="Auto,* ,Auto" ColumnSpacing="12">
+                        <TextBlock VerticalAlignment="Center" Text="Max avg dist"/>
+                        <Slider Grid.Column="1"
+                                Minimum="2"
+                                Maximum="30"
+                                Value="{Binding DupeMaxAvgDist}"
+                                TickFrequency="1"
+                                IsSnapToTickEnabled="False"/>
+                        <TextBlock Grid.Column="2"
+                                   VerticalAlignment="Center"
+                                   Opacity="0.85"
+                                   Text="{Binding DupeMaxAvgDist, StringFormat={}{0:F0}}"/>
+                      </Grid>
+
+                      <!-- Frames -->
+                      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                        <TextBlock VerticalAlignment="Center" Text="Frames (%)"/>
+                        <TextBox Grid.Column="1"
+                                 Watermark="20,50,80"
+                                 Text="{Binding DupeFramesCsv}"/>
+                      </Grid>
+
+                      <TextBlock Opacity="0.65"
+                                 Text="Frames = comma separated percents (1..99). Example: 20,50,80"/>
+                    </StackPanel>
+                  </Border>
+                </Expander>
+
+                <!-- Groups list -->
+                <Border Grid.Row="2" CornerRadius="10" Padding="10">
                   <ScrollViewer VerticalScrollBarVisibility="Auto"
                                 HorizontalScrollBarVisibility="Disabled">
                     <ListBox ItemsSource="{Binding FilteredGroups}"
@@ -326,29 +353,30 @@
         </Grid>
       </Border>
 
+      <!-- Splitter -->
+      <GridSplitter Grid.Column="1"
+                    Width="8"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch"/>
+
       <!-- RIGHT PANE -->
-      <Border Grid.Column="1"
-              CornerRadius="12"
-              Padding="12">
+      <Border Grid.Column="2" CornerRadius="12" Padding="12">
         <Grid RowDefinitions="Auto,*"
               RowSpacing="10">
 
-          <StackPanel Grid.Row="0" Spacing="4">
+          <StackPanel Grid.Row="0" Spacing="6">
             <TextBlock FontSize="18"
                        FontWeight="SemiBold"
                        Text="{Binding SelectedGroup.Title}"/>
-            <TextBlock Opacity="0.85"
+            <TextBlock Opacity="0.75"
                        Text="Tip: Double-click a member to open. Right-click for menu."/>
           </StackPanel>
 
-          <Border Grid.Row="1"
-                  CornerRadius="10"
-                  Padding="10">
+          <Border Grid.Row="1" CornerRadius="10" Padding="10">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
               <ItemsControl ItemsSource="{Binding SelectedGroup.Members}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:MemberVm">
-
                     <Border CornerRadius="12"
                             Padding="12"
                             Margin="0,0,0,12"
@@ -365,64 +393,62 @@
                           <MenuItem Header="Copy Path"
                                     Command="{Binding $parent[Window].DataContext.CopyPathCommand}"
                                     CommandParameter="{Binding .}" />
+                          <MenuItem Header="Delete"
+                                    Command="{Binding $parent[Window].DataContext.DeleteFileCommand}"
+                                    CommandParameter="{Binding .}" />
                         </ContextMenu>
                       </Border.ContextMenu>
 
                       <StackPanel Spacing="10">
 
-                        <!-- Header row -->
-                        <Grid ColumnDefinitions="Auto,*"
-                              ColumnSpacing="10">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
                           <TextBlock Grid.Column="0"
                                      Text="BEST"
                                      FontWeight="Bold"
-                                     Opacity="0.95"
-                                     IsVisible="{Binding IsBest}" />
-                          <TextBlock Grid.Column="1"
-                                     FontWeight="SemiBold"
-                                     TextWrapping="Wrap"
-                                     Text="{Binding Path}" />
+                                     Opacity="0.9"
+                                     IsVisible="{Binding IsBest}"/>
+
+                          <StackPanel Grid.Column="1" Spacing="2">
+                            <TextBlock FontWeight="SemiBold"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding Path}" />
+                            <TextBlock Text="MISSING"
+                                       FontWeight="Bold"
+                                       Opacity="0.85"
+                                       IsVisible="{Binding IsMissing}"/>
+                          </StackPanel>
                         </Grid>
 
-                        <!-- Thumbs -->
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                          <Border Width="220" Height="124" CornerRadius="10" Padding="0">
-                            <Image Source="{Binding Thumb20}" Stretch="UniformToFill"/>
-                          </Border>
-                          <Border Width="220" Height="124" CornerRadius="10" Padding="0">
-                            <Image Source="{Binding Thumb50}" Stretch="UniformToFill"/>
-                          </Border>
-                          <Border Width="220" Height="124" CornerRadius="10" Padding="0">
-                            <Image Source="{Binding Thumb80}" Stretch="UniformToFill"/>
-                          </Border>
-                        </StackPanel>
-                        <TextBlock Text="MISSING"
-                                   FontWeight="Bold"
-                                   Opacity="0.85"
-                                   IsVisible="{Binding IsMissing}"/>
-                        <TextBlock Opacity="0.85"
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Disabled">
+                          <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Border Width="240" Height="135" CornerRadius="10">
+                              <Image Source="{Binding Thumb20}" Stretch="UniformToFill"/>
+                            </Border>
+                            <Border Width="240" Height="135" CornerRadius="10">
+                              <Image Source="{Binding Thumb50}" Stretch="UniformToFill"/>
+                            </Border>
+                            <Border Width="240" Height="135" CornerRadius="10">
+                              <Image Source="{Binding Thumb80}" Stretch="UniformToFill"/>
+                            </Border>
+                          </StackPanel>
+                        </ScrollViewer>
+
+                        <TextBlock Opacity="0.75"
                                    Text="Loading thumbnails…"
                                    IsVisible="{Binding ThumbsLoading}"/>
 
-                        <!-- Meta line -->
-                        <WrapPanel ItemSpacing="14">
-                          <TextBlock Opacity="0.85"
-                                     Text="{Binding AvgDist, StringFormat=avgDist: {0:F1}}"/>
-                          <TextBlock Opacity="0.85"
-                                     Text="{Binding Width}"/>
+                        <WrapPanel ItemSpacing="14" LineSpacing="6">
+                          <TextBlock Opacity="0.85" Text="{Binding AvgDist, StringFormat=avgDist: {0:F1}}"/>
+                          <TextBlock Opacity="0.85" Text="{Binding Width}"/>
                           <TextBlock Opacity="0.85" Text="x"/>
-                          <TextBlock Opacity="0.85"
-                                     Text="{Binding Height}"/>
-                          <TextBlock Opacity="0.85"
-                                     Text="{Binding DurationSec, StringFormat={}{0:F2}s}"/>
-                          <TextBlock Opacity="0.85"
-                                     Text="{Binding SizeBytes, StringFormat={}{0} bytes}"/>
-                          <TextBlock Opacity="0.85"
-                                     Text="{Binding VideoCodec}"/>
+                          <TextBlock Opacity="0.85" Text="{Binding Height}"/>
+                          <TextBlock Opacity="0.85" Text="{Binding DurationSec, StringFormat={}{0:F2}s}"/>
+                          <TextBlock Opacity="0.85" Text="{Binding SizeBytes, StringFormat={}{0} bytes}"/>
+                          <TextBlock Opacity="0.85" Text="{Binding VideoCodec}"/>
                         </WrapPanel>
 
-                        <!-- Action row (optional buttons; context menu exists anyway) -->
-                        <WrapPanel ItemSpacing="10">
+                        <WrapPanel ItemSpacing="10" LineSpacing="8">
                           <Button Content="Open"
                                   Command="{Binding $parent[Window].DataContext.OpenFileCommand}"
                                   CommandParameter="{Binding .}"/>
@@ -439,7 +465,6 @@
 
                       </StackPanel>
                     </Border>
-
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>

@@ -976,6 +976,14 @@ public partial class MainViewModel : ObservableObject
             Status = $"Copy failed: {ex.Message}";
         }
     }
+    [ObservableProperty] private double dupeMinItemsDouble = 2;
+
+    partial void OnDupeMinItemsDoubleChanged(double value)
+    {
+        DupeMinItems = Math.Max(2, (int)Math.Round(value));
+        DupeMinItemsDouble = DupeMinItems; // snaps to integer
+    }
+    partial void OnDupeMinItemsChanged(int value) => DupeMinItemsDouble = value;
 }
 
 public partial class GroupVm : ObservableObject
