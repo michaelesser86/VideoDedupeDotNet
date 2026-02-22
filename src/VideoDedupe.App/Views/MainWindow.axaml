@@ -66,6 +66,34 @@
                   Command="{Binding LoadGroupsCommand}"
                   IsEnabled="{Binding !IsBusy}"/>
         </WrapPanel>
+        <Expander Header="Dupe Settings" IsExpanded="False" Width="520" Margin="10,0,0,0">
+          <StackPanel Spacing="8" Margin="0,8,0,0">
+
+            <CheckBox Content="Clear existing groups"
+                      IsChecked="{Binding DupeClearExisting}"/>
+
+            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="10">
+
+              <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" Text="Tol (sec)"/>
+              <TextBox Grid.Row="0" Grid.Column="1" Width="140" Text="{Binding DupeTolSec}"/>
+
+              <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Text="Min items"/>
+              <TextBox Grid.Row="1" Grid.Column="1" Width="140" Text="{Binding DupeMinItems}"/>
+
+              <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" Text="Max avg dist"/>
+              <TextBox Grid.Row="2" Grid.Column="1" Width="140" Text="{Binding DupeMaxAvgDist}"/>
+
+              <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Text="Frames (%)"/>
+              <TextBox Grid.Row="3" Grid.Column="1"
+                       Watermark="20,50,80"
+                       Text="{Binding DupeFramesCsv}"/>
+            </Grid>
+
+            <TextBlock Opacity="0.7"
+                       Text="Frames: comma-separated percents (1..99). Example: 20,50,80" />
+
+          </StackPanel>
+        </Expander>
 
         <StackPanel Orientation="Vertical" Spacing="4" Margin="10,0,0,0" Width="420">
           <ProgressBar Minimum="0"

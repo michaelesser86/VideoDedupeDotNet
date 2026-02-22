@@ -56,9 +56,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string dupeCurrent = "";
     // Dupe-build settings (UI)
     [ObservableProperty] private bool dupeClearExisting = true;
-    [ObservableProperty] private double dupeTolSec = 0.25;
+    [ObservableProperty] private double dupeTolSec = 0.5;
     [ObservableProperty] private int dupeMinItems = 2;
-    [ObservableProperty] private double dupeMaxAvgDist = 10.0;
+    [ObservableProperty] private double dupeMaxAvgDist = 12.0;
     [ObservableProperty] private string dupeFramesCsv = "20,50,80";
 
     public double DupePercent => DupeTotal <= 0 ? 0 : (double)DupeDone / DupeTotal;
@@ -82,6 +82,7 @@ public partial class MainViewModel : ObservableObject
     }
 
     partial void OnSelectedGroupChanged(GroupVm? value)
+
     {
         // Cancel previous thumbnail load
         _thumbCts?.Cancel();
