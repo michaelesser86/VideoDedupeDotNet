@@ -167,31 +167,48 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            if (string.IsNullOrWhiteSpace(m.Path) || !File.Exists(m.Path))
+            if (string.IsNullOrWhiteSpace(m.Path))
             {
-                Status = "File not found.";
+                Status = "File path missing.";
                 return;
             }
 
-            // Windows: in den Papierkorb (safer)
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            // 1) Datei löschen (Windows -> Recycle Bin)
+            if (File.Exists(m.Path))
             {
-                // Microsoft.VisualBasic ist Teil von .NET (kein NuGet nötig)
-                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
-                    m.Path,
-                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-            }
-            else
-            {
-                // Fallback: hart löschen (Linux/macOS)
-                File.Delete(m.Path);
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                        m.Path,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                }
+                else
+                {
+                    File.Delete(m.Path);
+                }
             }
 
-            Status = "Deleted (recycle bin on Windows).";
+            // 2) In DB markieren (wichtig, sonst bleibt die Datei "aktiv" in späteren Läufen)
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+            await db.MarkMediaFileDeletedAsync(m.MediaFileId);
 
-            // UI aktualisieren: Member aus aktueller Gruppe entfernen
+            Status = "Deleted and marked in DB.";
+
+            // 3) UI: Member aus aktueller Gruppe entfernen
             SelectedGroup?.Members.Remove(m);
+
+            // 4) Optional: wenn Gruppe jetzt < 2 Members hat, auch Gruppe entfernen
+            if (SelectedGroup is not null && SelectedGroup.Members.Count < 2)
+            {
+                var toRemove = SelectedGroup;
+                SelectedGroup = null;
+
+                // falls du FilteredGroups als ObservableCollection hast:
+                FilteredGroups.Remove(toRemove);
+                Groups.Remove(toRemove);
+            }
         }
         catch (Exception ex)
         {
@@ -985,6 +1002,7 @@ public partial class MemberVm : ObservableObject
     public int? Width => File.Width;
     public int? Height => File.Height;
     public string? VideoCodec => File.VideoCodec;
+    public long MediaFileId { get; init; }
 
     public double AvgDist { get; }
 
