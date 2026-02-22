@@ -396,7 +396,10 @@
                             <Image Source="{Binding Thumb80}" Stretch="UniformToFill"/>
                           </Border>
                         </StackPanel>
-
+                        <TextBlock Text="MISSING"
+                                   FontWeight="Bold"
+                                   Opacity="0.85"
+                                   IsVisible="{Binding IsMissing}"/>
                         <TextBlock Opacity="0.85"
                                    Text="Loading thumbnails…"
                                    IsVisible="{Binding ThumbsLoading}"/>

@@ -280,6 +280,7 @@ public partial class MainViewModel : ObservableObject
                     TolSec = g.TolSec,
                     MaxAvgDist = g.MaxAvgDist,
                     CreatedUtc = g.CreatedUtc
+
                 };
 
                 foreach (var (file, avgDist) in members)
@@ -1002,7 +1003,8 @@ public partial class MemberVm : ObservableObject
     public int? Width => File.Width;
     public int? Height => File.Height;
     public string? VideoCodec => File.VideoCodec;
-    public long MediaFileId { get; init; }
+    public long MediaFileId => File.Id;
+    public bool IsMissing => string.IsNullOrWhiteSpace(File.Path) || !System.IO.File.Exists(File.Path);
 
     public double AvgDist { get; }
 
@@ -1017,7 +1019,7 @@ public partial class MemberVm : ObservableObject
 
     public MemberVm(AppDb.MediaFileRow file, double avgDist)
     {
-        File = file;
+        File = file ?? throw new ArgumentNullException(nameof(file));
         AvgDist = avgDist;
     }
 
