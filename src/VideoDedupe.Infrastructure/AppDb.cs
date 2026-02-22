@@ -175,7 +175,7 @@ WHERE Id = @Id;
                 Id, Path, SizeBytes, ModifiedUtc, LastScannedUtc,
                 DurationSec, Width, Height, Fps, VideoCodec, Container
                 FROM MediaFile
-                WHERE DurationSec IS NOT NULL AND Width IS NOT NULL AND Height IS NOT NULL
+                WHERE DurationSec IS NOT NULL AND Width IS NOT NULL AND Height IS NOT NULL AND IsDeleted = 0
 ");
             return rows.ToList();
         }
