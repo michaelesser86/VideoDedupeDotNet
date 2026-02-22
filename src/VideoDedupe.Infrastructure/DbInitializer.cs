@@ -30,7 +30,8 @@ public static class DbInitializer
 
         try { await db.ExecuteAsync("ALTER TABLE ScanRoot ADD COLUMN IncludeSubdirs INTEGER NOT NULL DEFAULT 1;"); } catch { }
         try { await db.ExecuteAsync("ALTER TABLE ScanRoot ADD COLUMN ExcludeText TEXT NULL;"); } catch { }
-
+        try { await db.ExecuteAsync("ALTER TABLE MediaFile ADD COLUMN IsDeleted INTEGER NOT NULL DEFAULT 0;"); }
+        catch { /* ignore: column already exists */ }
         await db.ExecuteAsync(@"
             CREATE TABLE IF NOT EXISTS FrameHash (
             MediaFileId INTEGER NOT NULL,
