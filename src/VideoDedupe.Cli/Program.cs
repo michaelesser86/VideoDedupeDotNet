@@ -413,6 +413,7 @@ switch (cmd)
 
     case "dupe-build":
         {
+            // Defaults
             double tol = 0.25;
             int minItems = 2;
             double maxAvgDist = 10.0;
@@ -456,125 +457,32 @@ switch (cmd)
                     clear = c;
             }
 
-            if (clear)
-                await db.ClearDuplicateGroupsAsync();
-
             var tools = new FfmpegTools();
             var extractor = new FfmpegFrameExtractor(tools);
-            var hasher = new DHashService();
+            var hasher = new VideoDedupe.Core.DHashService();
 
-            var files = await db.ListMediaFilesForCandidatesAsync();
+            var svc = new VideoDedupe.Infrastructure.DupeBuildService(db, extractor, hasher);
 
-            var buckets = files
-                .GroupBy(f => (f.Width!.Value, f.Height!.Value, DurKey: Math.Round(f.DurationSec!.Value, 1)))
-                .Where(g => g.Count() >= minItems)
-                .OrderByDescending(g => g.Count())
-                .ToList();
+            var opt = new VideoDedupe.Infrastructure.DupeBuildOptions(
+                ClearExisting: clear,
+                TolSec: tol,
+                MinItems: minItems,
+                MaxAvgDist: maxAvgDist,
+                FramePercents: positions
+            );
 
-            int savedGroups = 0;
-
-            foreach (var b in buckets)
+            var prog = new Progress<VideoDedupe.Infrastructure.DupeBuildProgress>(p =>
             {
-                var bucketFiles = b.OrderBy(f => f.DurationSec).ToList();
-
-                while (bucketFiles.Count >= minItems)
+                // Console-Ausgabe nicht zu spammy
+                if (p.Total <= 1 || p.Done % 25 == 0)
                 {
-                    var seed = bucketFiles[0];
-                    var seedDur = seed.DurationSec!.Value;
-
-                    var cluster = bucketFiles
-                        .Where(f => Math.Abs(f.DurationSec!.Value - seedDur) <= tol)
-                        .ToList();
-
-                    foreach (var c in cluster)
-                        bucketFiles.Remove(c);
-
-                    if (cluster.Count < minItems)
-                        continue;
-
-                    // compute hashes
-                    var verified = new List<(AppDb.MediaFileRow File, Dictionary<int, ulong> Hashes)>();
-
-                    foreach (var f in cluster)
-                    {
-                        if (f.Id == 0) continue;
-                        if (f.DurationSec is null || f.DurationSec <= 1.0) continue;
-                        if (string.IsNullOrWhiteSpace(f.Path) || !File.Exists(f.Path)) continue;
-
-                        var map = new Dictionary<int, ulong>();
-
-                        foreach (var pos in positions)
-                        {
-                            var h = await db.GetFrameHashAsync(f.Id, pos);
-                            if (h is null)
-                            {
-                                try
-                                {
-                                    var ts = f.DurationSec.Value * (pos / 100.0);
-                                    var png = await extractor.ExtractFramePngAsync(f.Path, ts, CancellationToken.None);
-                                    var computed = hasher.ComputeDHash64(png);
-                                    await db.UpsertFrameHashAsync(f.Id, pos, computed);
-                                    h = computed;
-                                }
-                                catch
-                                {
-                                    continue;
-                                }
-                            }
-                            map[pos] = h.Value;
-                        }
-
-                        if (map.Count > 0)
-                            verified.Add((f, map));
-                    }
-
-                    if (verified.Count < minItems)
-                        continue;
-
-                    var seedHashes = verified[0].Hashes;
-
-                    double AvgDist(Dictionary<int, ulong> a, Dictionary<int, ulong> c)
-                    {
-                        var keys = a.Keys.Intersect(c.Keys).ToList();
-                        if (keys.Count == 0) return 9999;
-
-                        double sum = 0;
-                        foreach (var k in keys)
-                            sum += DHashService.HammingDistance(a[k], c[k]);
-
-                        return sum / keys.Count;
-                    }
-
-                    var final = verified
-                        .Select(v => (v.File, Avg: AvgDist(seedHashes, v.Hashes)))
-                        .Where(x => x.Avg <= maxAvgDist)
-                        .OrderBy(x => x.Avg)
-                        .ToList();
-
-                    if (final.Count < minItems)
-                        continue;
-
-                    // Save group + members
-                    var groupId = await db.InsertDuplicateGroupAsync(
-                        algorithm: "dhash",
-                        frames: string.Join(",", positions),
-                        tolSec: tol,
-                        maxAvgDist: maxAvgDist);
-
-                    var members = final.Select(x => new AppDb.DuplicateMemberRow
-                    {
-                        GroupId = groupId,
-                        MediaFileId = x.File.Id,
-                        AvgDist = x.Avg
-                    });
-
-                    await db.InsertDuplicateMembersAsync(groupId, members);
-
-                    savedGroups++;
+                    var cur = string.IsNullOrWhiteSpace(p.Current) ? "" : $" :: {p.Current}";
+                    Console.WriteLine($"{p.Phase}: {p.Done}/{p.Total}{cur}");
                 }
-            }
+            });
 
-            Console.WriteLine($"Saved duplicate groups: {savedGroups}");
+            var saved = await svc.RunAsync(opt, prog, CancellationToken.None);
+            Console.WriteLine($"Saved duplicate groups: {saved}");
             break;
         }
     case "dupe-list":

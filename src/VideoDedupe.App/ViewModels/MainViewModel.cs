@@ -49,6 +49,18 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private int indexOk;
     [ObservableProperty] private int indexFail;
     [ObservableProperty] private string indexCurrent = "";
+    [ObservableProperty] private bool isDupeBuilding;
+    [ObservableProperty] private string dupePhase = "";
+    [ObservableProperty] private int dupeTotal;
+    [ObservableProperty] private int dupeDone;
+    [ObservableProperty] private string dupeCurrent = "";
+
+    public double DupePercent => DupeTotal <= 0 ? 0 : (double)DupeDone / DupeTotal;
+
+    private CancellationTokenSource? _dupeCts;
+
+    partial void OnDupeTotalChanged(int value) => OnPropertyChanged(nameof(DupePercent));
+    partial void OnDupeDoneChanged(int value) => OnPropertyChanged(nameof(DupePercent));
 
     public double IndexPercent => IndexDiscovered <= 0 ? 0 : (double)IndexProcessed / IndexDiscovered;
 
@@ -363,26 +375,73 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     public async Task RunDupeBuildAsync()
     {
+        if (IsDupeBuilding) return;
+
         try
         {
             IsBusy = true;
-            Status = "Running dupe-build...";
-            await RunCliAsync($"dupe-build --db=\"{DbPath}\" --clear=true");
-            Status = "dupe-build finished.";
+            IsDupeBuilding = true;
 
-            // refresh groups in UI
+            DupePhase = "Starting...";
+            DupeTotal = 0;
+            DupeDone = 0;
+            DupeCurrent = "";
+            Status = "Dupe build running...";
+
+            _dupeCts?.Cancel();
+            _dupeCts?.Dispose();
+            _dupeCts = new CancellationTokenSource();
+            var ct = _dupeCts.Token;
+
+            var db = new AppDb(DbPath);
+            await DbInitializer.EnsureCreatedAsync(db);
+
+            var tools = new FfmpegTools();
+            var extractor = new FfmpegFrameExtractor(tools);
+            var dhash = new VideoDedupe.Core.DHashService();
+
+            var svc = new DupeBuildService(db, extractor, dhash);
+
+            // Nimm hier erstmal feste Defaults – später hängen wir UI-Settings dran
+            var opt = new DupeBuildOptions(
+                ClearExisting: true,
+                TolSec: 0.5,
+                MaxAvgDist: 12,
+                FramePercents: new[] { 20, 50, 80 }
+            );
+
+            var prog = new Progress<DupeBuildProgress>(p =>
+            {
+                DupePhase = p.Phase;
+                DupeTotal = p.Total;
+                DupeDone = p.Done;
+                DupeCurrent = p.Current ?? "";
+            });
+
+            await svc.RunAsync(opt, prog, ct);
+
+            Status = "Dupe build finished.";
             await LoadGroupsAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            Status = "Dupe build canceled.";
         }
         catch (Exception ex)
         {
-            Status = $"Error: {ex.Message}";
+            Status = $"Dupe build error: {ex.Message}";
         }
         finally
         {
+            IsDupeBuilding = false;
             IsBusy = false;
         }
     }
-
+    [RelayCommand]
+    public void CancelDupeBuild()
+    {
+        _dupeCts?.Cancel();
+    }
     [RelayCommand]
     public async Task SaveRootOptionsAsync()
     {
