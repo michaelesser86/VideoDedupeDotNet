@@ -39,6 +39,14 @@ namespace VideoDedupe.Infrastructure
                 new { Id = id, E = enabled ? 1 : 0 });
         }
 
+        public async Task MarkMediaFileDeletedAsync(long mediaFileId)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(
+                "UPDATE MediaFile SET IsDeleted=1 WHERE Id=@Id;",
+                new { Id = mediaFileId });
+        }
+
         public sealed class ScanRootRow
         {
             public long Id { get; set; }
