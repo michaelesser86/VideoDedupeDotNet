@@ -429,6 +429,9 @@
                           <Button Content="Copy Path"
                                   Command="{Binding $parent[Window].DataContext.CopyPathCommand}"
                                   CommandParameter="{Binding .}"/>
+                          <Button Content="Delete"
+                                  Command="{Binding $parent[Window].DataContext.DeleteFileCommand}"
+                                  CommandParameter="{Binding .}"/>
                         </WrapPanel>
 
                       </StackPanel>

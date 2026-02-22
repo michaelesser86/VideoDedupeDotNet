@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -158,6 +159,46 @@ public partial class MainViewModel : ObservableObject
             Status = $"AddRootFromText failed: {ex.Message}";
         }
     }
+
+    [RelayCommand]
+    public async Task DeleteFileAsync(MemberVm? m)
+    {
+        if (m is null) return;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(m.Path) || !File.Exists(m.Path))
+            {
+                Status = "File not found.";
+                return;
+            }
+
+            // Windows: in den Papierkorb (safer)
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                // Microsoft.VisualBasic ist Teil von .NET (kein NuGet nötig)
+                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                    m.Path,
+                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+            }
+            else
+            {
+                // Fallback: hart löschen (Linux/macOS)
+                File.Delete(m.Path);
+            }
+
+            Status = "Deleted (recycle bin on Windows).";
+
+            // UI aktualisieren: Member aus aktueller Gruppe entfernen
+            SelectedGroup?.Members.Remove(m);
+        }
+        catch (Exception ex)
+        {
+            Status = $"Delete failed: {ex.Message}";
+        }
+    }
+
     [RelayCommand]
     public async Task PickDbAsync()
     {
