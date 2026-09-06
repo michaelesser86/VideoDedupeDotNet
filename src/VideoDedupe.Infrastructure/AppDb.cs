@@ -25,6 +25,19 @@ namespace VideoDedupe.Infrastructure
             using var cn = Open();
             await cn.ExecuteAsync(sql, args);
         }
+
+        internal async Task EnsureColumnAsync(string table, string column, string type)
+        {
+            using var cn = Open();
+            using var tx = cn.BeginTransaction();
+            var exists = await cn.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM pragma_table_info(@Table) WHERE name = @Column COLLATE NOCASE",
+                new { Table = table, Column = column }, tx);
+            // Identifiers and type are internal schema constants, never user input.
+            if (exists == 0)
+                await cn.ExecuteAsync($"ALTER TABLE {table} ADD COLUMN {column} {type};", transaction: tx);
+            tx.Commit();
+        }
         public async Task DeleteScanRootAsync(long id)
         {
             using var cn = Open();
@@ -74,6 +87,9 @@ namespace VideoDedupe.Infrastructure
         public async Task UpsertMediaFileStubAsync(string path, long sizeBytes, DateTime modifiedUtc)
         {
             using var cn = Open();
+            using var tx = cn.BeginTransaction();
+            var modified = modifiedUtc.ToString("O");
+            await InvalidateFrameHashesAsync(cn, tx, path, sizeBytes, modified);
 
             await cn.ExecuteAsync(@"
 INSERT INTO MediaFile(Path, SizeBytes, ModifiedUtc, LastScannedUtc)
@@ -86,28 +102,27 @@ ON CONFLICT(Path) DO UPDATE SET
             {
                 Path = path,
                 SizeBytes = sizeBytes,
-                ModifiedUtc = modifiedUtc.ToString("O"),
+                ModifiedUtc = modified,
                 Now = DateTime.UtcNow.ToString("O")
-            });
+            }, tx);
+            tx.Commit();
         }
 
         public async Task<long> AddScanRootAsync(string path)
         {
-            var normalized = Normalize(path);
+            var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
             using var cn = Open();
 
-            await cn.ExecuteAsync(@"
+            return await cn.ExecuteScalarAsync<long>(@"
 INSERT INTO ScanRoot(Path, IsEnabled, AddedUtc, IncludeSubdirs, ExcludeText)
-VALUES (@Path, 1, @Utc, 1, NULL);
+VALUES (@Path, 1, @Utc, 1, NULL)
+RETURNING Id;
 ", new
             {
-                Path = path,
+                Path = normalized,
                 Utc = DateTime.UtcNow.ToString("O")
             });
 
-            return await cn.ExecuteScalarAsync<long>(
-                "SELECT Id FROM ScanRoot WHERE Path = @Path",
-                new { Path = normalized });
         }
         public async Task UpdateScanRootOptionsAsync(long id, bool includeSubdirs, string? excludeText)
         {
@@ -142,6 +157,8 @@ WHERE Id = @Id;
         public async Task UpsertMediaFileAsync(MediaFileRow row)
         {
             using var cn = Open();
+            using var tx = cn.BeginTransaction();
+            await InvalidateFrameHashesAsync(cn, tx, row.Path, row.SizeBytes, row.ModifiedUtc);
             await cn.ExecuteAsync(@"
                 INSERT INTO MediaFile(Path, SizeBytes, ModifiedUtc, LastScannedUtc, DurationSec, Width, Height, Fps, VideoCodec, Container)
                 VALUES (@Path, @SizeBytes, @ModifiedUtc, @LastScannedUtc, @DurationSec, @Width, @Height, @Fps, @VideoCodec, @Container)
@@ -155,8 +172,17 @@ WHERE Id = @Id;
                     Fps=excluded.Fps,
                     VideoCodec=excluded.VideoCodec,
                     Container=excluded.Container;
-                    ", row);
+                    ", row, tx);
+            tx.Commit();
         }
+
+        private static Task<int> InvalidateFrameHashesAsync(SqliteConnection cn, SqliteTransaction tx,
+            string path, long sizeBytes, string modifiedUtc) => cn.ExecuteAsync(@"
+DELETE FROM FrameHash
+WHERE MediaFileId IN (
+    SELECT Id FROM MediaFile
+    WHERE Path = @Path AND (SizeBytes IS NOT @SizeBytes OR ModifiedUtc IS NOT @ModifiedUtc)
+);", new { Path = path, SizeBytes = sizeBytes, ModifiedUtc = modifiedUtc }, tx);
 
         public async Task<List<MediaFileRow>> ListMediaFilesAsync(int take = 50)
         {
@@ -175,7 +201,7 @@ WHERE Id = @Id;
                 Id, Path, SizeBytes, ModifiedUtc, LastScannedUtc,
                 DurationSec, Width, Height, Fps, VideoCodec, Container
                 FROM MediaFile
-                WHERE DurationSec IS NOT NULL AND Width IS NOT NULL AND Height IS NOT NULL AND IsDeleted = 0
+                WHERE DurationSec IS NOT NULL AND IsDeleted = 0
 ");
             return rows.ToList();
         }
@@ -200,7 +226,6 @@ WHERE Id = @Id;
             return v is null ? null : unchecked((ulong)v.Value);
         }
 
-        private static string Normalize(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant();
 
         public async Task ClearDuplicateGroupsAsync()
         {
@@ -208,12 +233,17 @@ WHERE Id = @Id;
             await cn.ExecuteAsync("DELETE FROM DuplicateGroup;");
         }
 
-        public async Task<long> InsertDuplicateGroupAsync(string algorithm, string frames, double tolSec, double maxAvgDist)
+        public async Task<long> InsertDuplicateGroupWithMembersAsync(
+            string algorithm, string frames, double tolSec, double maxAvgDist,
+            IEnumerable<DuplicateMemberRow> members, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
             using var cn = Open();
-            await cn.ExecuteAsync(@"
+            using var tx = cn.BeginTransaction();
+            var groupId = await cn.ExecuteScalarAsync<long>(new CommandDefinition(@"
 INSERT INTO DuplicateGroup(Algorithm, Frames, TolSec, MaxAvgDist, CreatedUtc)
-VALUES (@Algorithm, @Frames, @TolSec, @MaxAvgDist, @Utc);
+VALUES (@Algorithm, @Frames, @TolSec, @MaxAvgDist, @Utc)
+RETURNING Id;
 ", new
             {
                 Algorithm = algorithm,
@@ -221,25 +251,21 @@ VALUES (@Algorithm, @Frames, @TolSec, @MaxAvgDist, @Utc);
                 TolSec = tolSec,
                 MaxAvgDist = maxAvgDist,
                 Utc = DateTime.UtcNow.ToString("O")
-            });
-
-            return await cn.ExecuteScalarAsync<long>("SELECT last_insert_rowid();");
-        }
-
-        public async Task InsertDuplicateMembersAsync(long groupId, IEnumerable<DuplicateMemberRow> members)
-        {
-            using var cn = Open();
-            using var tx = cn.BeginTransaction();
+            }, transaction: tx, cancellationToken: ct));
 
             foreach (var m in members)
             {
-                await cn.ExecuteAsync(@"
-INSERT OR REPLACE INTO DuplicateMember(GroupId, MediaFileId, AvgDist)
+                ct.ThrowIfCancellationRequested();
+                await cn.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO DuplicateMember(GroupId, MediaFileId, AvgDist)
 VALUES (@GroupId, @MediaFileId, @AvgDist);
-", m, tx);
+", new { GroupId = groupId, m.MediaFileId, m.AvgDist },
+                    transaction: tx, cancellationToken: ct));
             }
 
+            ct.ThrowIfCancellationRequested();
             tx.Commit();
+            return groupId;
         }
 
         private sealed class MemberJoinRow
@@ -285,16 +311,22 @@ ON CONFLICT(MediaFileId) DO UPDATE SET
                 new { Id = mediaFileId });
         }
 
-        public async Task<List<(DuplicateGroupRow Group, List<(MediaFileRow File, double AvgDist)> Members)>> ListDuplicateGroupsWithMembersAsync(int take = 50)
+        public async Task<List<(DuplicateGroupRow Group, List<(MediaFileRow File, double AvgDist)> Members)>> ListDuplicateGroupsWithMembersAsync(int? take = null)
         {
             using var cn = Open();
 
-            var groups = (await cn.QueryAsync<DuplicateGroupRow>(@"
+            var groupQuery = @"
 SELECT Id, Algorithm, Frames, TolSec, MaxAvgDist, CreatedUtc
 FROM DuplicateGroup
+WHERE 2 <= (
+  SELECT COUNT(*)
+  FROM DuplicateMember member
+  JOIN MediaFile file ON file.Id = member.MediaFileId
+  WHERE member.GroupId = DuplicateGroup.Id AND file.IsDeleted = 0
+)
 ORDER BY Id DESC
-LIMIT @Take;
-", new { Take = take })).ToList();
+" + (take is null ? ";" : "LIMIT @Take;");
+            var groups = (await cn.QueryAsync<DuplicateGroupRow>(groupQuery, new { Take = take })).ToList();
 
             var result = new List<(DuplicateGroupRow, List<(MediaFileRow, double)>)>();
 
@@ -316,7 +348,7 @@ SELECT
   f.Container as Container
 FROM DuplicateMember m
 JOIN MediaFile f ON f.Id = m.MediaFileId
-WHERE m.GroupId = @GroupId
+WHERE m.GroupId = @GroupId AND f.IsDeleted = 0
 ORDER BY m.AvgDist ASC;
 ", new { GroupId = g.Id })).ToList();
 

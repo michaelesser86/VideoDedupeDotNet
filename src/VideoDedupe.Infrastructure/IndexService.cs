@@ -5,7 +5,8 @@ public sealed record IndexProgress(
     int Processed,
     int ProbedOk,
     int ProbedFail,
-    string? CurrentPath
+    string? CurrentPath,
+    string? Error = null
 );
 
 public sealed class IndexService
@@ -81,13 +82,16 @@ public sealed class IndexService
                 var scannedUtc = DateTime.UtcNow.ToString("O");
 
                 FfprobeService.ProbeResult meta;
+                string? error = null;
                 try
                 {
                     meta = await _probe.ProbeAsync(full, ct);
                     Interlocked.Increment(ref ok);
                 }
-                catch
+                catch (Exception ex) when (MediaErrors.IsRecoverable(ex))
                 {
+                    error = ex.Message;
+                    System.Diagnostics.Trace.TraceWarning($"Probe failed: {full}: {ex}");
                     meta = new FfprobeService.ProbeResult(null, null, null, null, null, null);
                     Interlocked.Increment(ref fail);
                 }
@@ -113,7 +117,8 @@ public sealed class IndexService
                     Processed: p,
                     ProbedOk: Volatile.Read(ref ok),
                     ProbedFail: Volatile.Read(ref fail),
-                    CurrentPath: full));
+                    CurrentPath: full,
+                    Error: error));
             }
             finally
             {

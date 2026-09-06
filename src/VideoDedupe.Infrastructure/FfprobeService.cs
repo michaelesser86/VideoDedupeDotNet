@@ -24,14 +24,13 @@ public sealed partial class FfprobeService
             "-show_format -show_streams " +
             $"\"{filePath}\"";
 
-        // Wenn deine RunAsync Signatur anders ist, sag’s kurz – aber du meintest: RunAsync.
-        var (exitCode, stdout, stderr) = await _tools.RunAsync("ffprobe", args, ct);
+        var (exitCode, stdout, stderr) = await _tools.RunAsync(_tools.FfprobePath, args, ct);
 
         if (exitCode != 0)
-            throw new InvalidOperationException($"ffprobe failed ({exitCode}). stderr: {stderr}");
+            throw new ExternalToolException($"ffprobe failed ({exitCode}). stderr: {stderr}");
 
         if (string.IsNullOrWhiteSpace(stdout))
-            throw new InvalidOperationException("ffprobe returned empty stdout.");
+            throw new ExternalToolException("ffprobe returned empty stdout.");
 
         using var doc = JsonDocument.Parse(stdout);
         var root = doc.RootElement;

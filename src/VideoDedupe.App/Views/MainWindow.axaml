@@ -5,21 +5,100 @@
         x:DataType="vm:MainViewModel"
         Width="1440"
         Height="880"
-        MinWidth="1200"
+        MinWidth="960"
         MinHeight="720"
         Title="VideoDedupe">
 
   <Window.DataContext>
     <vm:MainViewModel/>
   </Window.DataContext>
+  <Window.Resources>
+    <!-- ===== Accent palette (Purple) ===== -->
+    <Color x:Key="AccentColor">#8B5CF6</Color>
+    <!-- violet -->
+    <Color x:Key="AccentColor2">#6366F1</Color>
+    <!-- indigo -->
+    <Color x:Key="AccentGlow">#A78BFA</Color>
+
+    <!-- ===== Surfaces (Dark) ===== -->
+    <SolidColorBrush x:Key="BgBrush" Color="#0B0B12"/>
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#121225"/>
+    <SolidColorBrush x:Key="Surface2Brush" Color="#17173A"/>
+    <SolidColorBrush x:Key="StrokeBrush" Color="#2B2B55"/>
+
+    <SolidColorBrush x:Key="AccentBrush" Color="{DynamicResource AccentColor}"/>
+    <SolidColorBrush x:Key="AccentBrush2" Color="{DynamicResource AccentColor2}"/>
+
+    <SolidColorBrush x:Key="TextBrush" Color="#F2F2FF"/>
+    <SolidColorBrush x:Key="TextDimBrush" Color="#B9B9D6"/>
+  </Window.Resources>
+
+  <Window.Styles>
+    <!-- Window background -->
+    <Style Selector="Window">
+      <Setter Property="Background" Value="{DynamicResource BgBrush}"/>
+    </Style>
+
+    <!-- Default text -->
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+    </Style>
+
+    <!-- Panels -->
+    <Style Selector="Border">
+      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+
+    <!-- Buttons (accent) -->
+    <Style Selector="Button">
+      <Setter Property="CornerRadius" Value="10"/>
+      <Setter Property="Padding" Value="12,8"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
+    </Style>
+
+    <!-- Secondary buttons (optional): add class 'secondary' -->
+    <Style Selector="Button.secondary">
+      <Setter Property="Background" Value="{DynamicResource Surface2Brush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+    </Style>
+
+    <!-- TextBox styling -->
+    <Style Selector="TextBox">
+      <Setter Property="CornerRadius" Value="10"/>
+      <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+      <Setter Property="Padding" Value="10,8"/>
+    </Style>
+
+    <!-- ComboBox / ListBox basic surfaces -->
+    <Style Selector="ComboBox">
+      <Setter Property="CornerRadius" Value="10"/>
+      <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+    </Style>
+
+    <Style Selector="ListBox">
+      <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+  </Window.Styles>
 
   <Grid RowDefinitions="Auto,*"
         Margin="14"
         RowSpacing="12">
 
     <!-- ===================== TOP BAR ===================== -->
-    <Border Grid.Row="0" CornerRadius="12" Padding="12">
-      <Grid ColumnDefinitions="*,520"
+    <Border Grid.Row="0" CornerRadius="12" Padding="12" Background="{DynamicResource SurfaceBrush}">
+      <Grid ColumnDefinitions="*,Auto"
             ColumnSpacing="14">
 
         <!-- Left: DB + Actions -->
@@ -30,7 +109,6 @@
                        FontWeight="SemiBold"
                        Text="Database"/>
             <TextBox Grid.Column="1"
-                     MinWidth="520"
                      Text="{Binding DbPath}"/>
             <Button Grid.Column="2"
                     Content="Pick DB…"
@@ -128,11 +206,11 @@
 
     <!-- ===================== MAIN CONTENT ===================== -->
     <Grid Grid.Row="1"
-          ColumnDefinitions="540,8,*"
+          ColumnDefinitions="*,8,2*"
           ColumnSpacing="12">
 
       <!--  LEFT PANE -->
-      <Border Grid.Column="0" CornerRadius="12" Padding="12">
+      <Border Grid.Column="0" CornerRadius="12" Padding="12" Background="{DynamicResource SurfaceBrush}">
         <Grid RowDefinitions="Auto,*"
               RowSpacing="10">
 
@@ -178,7 +256,7 @@
                       ColumnDefinitions="*,*"
                       ColumnSpacing="12">
 
-                  <Border Grid.Column="0" CornerRadius="10" Padding="10">
+                  <Border Grid.Column="0" CornerRadius="10" Padding="10" Background="{DynamicResource Surface2Brush}">
                     <Grid RowDefinitions="Auto,*" RowSpacing="8">
                       <TextBlock Grid.Row="0" FontWeight="SemiBold" Text="Roots"/>
                       <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
@@ -243,10 +321,8 @@
                            Text="{Binding GroupFilter}"/>
                   <ComboBox Grid.Column="1"
                             Width="170"
-                            SelectedItem="{Binding GroupSort}">
-                    <ComboBoxItem Content="SizeDesc"/>
-                    <ComboBoxItem Content="Newest"/>
-                  </ComboBox>
+                            ItemsSource="{Binding GroupSortOptions}"
+                            SelectedItem="{Binding GroupSort}"/>
                 </Grid>
 
                 <!-- Options expander -->
@@ -319,7 +395,7 @@
                 </Expander>
 
                 <!-- Groups list -->
-                <Border Grid.Row="2" CornerRadius="10" Padding="10">
+                <Border Grid.Row="2" CornerRadius="10" Padding="10" Background="{DynamicResource Surface2Brush}">
                   <ScrollViewer VerticalScrollBarVisibility="Auto"
                                 HorizontalScrollBarVisibility="Disabled">
                     <ListBox ItemsSource="{Binding FilteredGroups}"
@@ -360,7 +436,7 @@
                     VerticalAlignment="Stretch"/>
 
       <!-- RIGHT PANE -->
-      <Border Grid.Column="2" CornerRadius="12" Padding="12">
+      <Border Grid.Column="2" CornerRadius="12" Padding="12" Background="{DynamicResource SurfaceBrush}">
         <Grid RowDefinitions="Auto,*"
               RowSpacing="10">
 

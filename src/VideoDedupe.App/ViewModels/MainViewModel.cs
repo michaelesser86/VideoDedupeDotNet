@@ -24,11 +24,11 @@ namespace VideoDedupe.App.ViewModels;
 
 public partial class MainViewModel : ObservableObject
 {
-    [ObservableProperty] private string dbPath = "videodedupe.db";
-    [ObservableProperty] private bool isBusy;
+    [ObservableProperty] private string dbPath = Path.Combine(AppContext.BaseDirectory, "videodedupe.db"); [ObservableProperty] private bool isBusy;
     [ObservableProperty] private string status = "";
     [ObservableProperty] private string groupFilter = "";
-    [ObservableProperty] private string groupSort = "SizeDesc"; // SizeDesc | Newest
+    [ObservableProperty] private string groupSort = "Largest files";
+    public IReadOnlyList<string> GroupSortOptions { get; } = ["Largest files", "Newest"];
     public ObservableCollection<GroupVm> Groups { get; } = new();
     public ObservableCollection<GroupVm> FilteredGroups { get; } = new();
     public ObservableCollection<RootVm> Roots { get; } = new();
@@ -43,7 +43,8 @@ public partial class MainViewModel : ObservableObject
 
     private readonly FfmpegTools _tools = new();
     private readonly FfmpegFrameExtractor _extractor;
-    private readonly Dictionary<(long MediaId, int Pos), Bitmap> _thumbCache = new();
+    private readonly Dictionary<(string Database, long MediaId, string ModifiedUtc, int Pos), Bitmap> _thumbCache = new();
+    private int _busyOperations;
     [ObservableProperty] private bool isIndexing;
     [ObservableProperty] private int indexDiscovered;
     [ObservableProperty] private int indexProcessed;
@@ -77,6 +78,40 @@ public partial class MainViewModel : ObservableObject
 
     partial void OnIndexDiscoveredChanged(int value) => OnPropertyChanged(nameof(IndexPercent));
     partial void OnIndexProcessedChanged(int value) => OnPropertyChanged(nameof(IndexPercent));
+    partial void OnDbPathChanged(string value)
+    {
+        _indexCts?.Cancel();
+        _dupeCts?.Cancel();
+        CancelAndClearThumbnails();
+        Roots.Clear();
+        Groups.Clear();
+        FilteredGroups.Clear();
+        SelectedRoot = null;
+        SelectedGroup = null;
+        Status = "Database changed. Load roots or groups for the selected database.";
+    }
+
+    private void EnterBusy()
+    {
+        _busyOperations++;
+        IsBusy = true;
+    }
+
+    private void ExitBusy()
+    {
+        _busyOperations = Math.Max(0, _busyOperations - 1);
+        IsBusy = _busyOperations > 0;
+    }
+
+    private void CancelAndClearThumbnails()
+    {
+        _thumbCts?.Cancel();
+        _thumbCts?.Dispose();
+        _thumbCts = null;
+        foreach (var bitmap in _thumbCache.Values)
+            bitmap.Dispose();
+        _thumbCache.Clear();
+    }
     public MainViewModel()
     {
         _extractor = new FfmpegFrameExtractor(_tools);
@@ -130,6 +165,7 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
+            EnterBusy();
             var path = (NewRootPath ?? "").Trim().Trim('"');
 
             if (string.IsNullOrWhiteSpace(path))
@@ -158,6 +194,10 @@ public partial class MainViewModel : ObservableObject
         {
             Status = $"AddRootFromText failed: {ex.Message}";
         }
+        finally
+        {
+            ExitBusy();
+        }
     }
 
     [RelayCommand]
@@ -167,6 +207,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
+            EnterBusy();
             if (string.IsNullOrWhiteSpace(m.Path))
             {
                 Status = "File path missing.";
@@ -196,23 +237,16 @@ public partial class MainViewModel : ObservableObject
 
             Status = "Deleted and marked in DB.";
 
-            // 3) UI: Member aus aktueller Gruppe entfernen
-            SelectedGroup?.Members.Remove(m);
-
-            // 4) Optional: wenn Gruppe jetzt < 2 Members hat, auch Gruppe entfernen
-            if (SelectedGroup is not null && SelectedGroup.Members.Count < 2)
-            {
-                var toRemove = SelectedGroup;
-                SelectedGroup = null;
-
-                // falls du FilteredGroups als ObservableCollection hast:
-                FilteredGroups.Remove(toRemove);
-                Groups.Remove(toRemove);
-            }
+            // Refresh every group: the same file can occur in more than one group.
+            await LoadGroupsAsync();
         }
         catch (Exception ex)
         {
             Status = $"Delete failed: {ex.Message}";
+        }
+        finally
+        {
+            ExitBusy();
         }
     }
 
@@ -221,6 +255,7 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
+            EnterBusy();
             var lifetime = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
             var topLevel = lifetime?.MainWindow is null ? null : TopLevel.GetTopLevel(lifetime.MainWindow);
             if (topLevel is null)
@@ -253,6 +288,10 @@ public partial class MainViewModel : ObservableObject
         {
             Status = $"Error: {ex.Message}";
         }
+        finally
+        {
+            ExitBusy();
+        }
     }
 
     [RelayCommand]
@@ -260,13 +299,13 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
-            IsBusy = true;
+            EnterBusy();
             Status = "Loading groups...";
 
             var db = new AppDb(DbPath);
             await DbInitializer.EnsureCreatedAsync(db);
 
-            var groups = await db.ListDuplicateGroupsWithMembersAsync(take: 200);
+            var groups = await db.ListDuplicateGroupsWithMembersAsync();
 
             Groups.Clear();
 
@@ -299,7 +338,7 @@ public partial class MainViewModel : ObservableObject
         }
         finally
         {
-            IsBusy = false;
+            ExitBusy();
         }
     }
 
@@ -353,7 +392,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            IsBusy = true;
+            EnterBusy();
             IsIndexing = true;
 
             IndexDiscovered = 0;
@@ -381,7 +420,7 @@ public partial class MainViewModel : ObservableObject
                 IndexProcessed = p.Processed;
                 IndexOk = p.ProbedOk;
                 IndexFail = p.ProbedFail;
-                IndexCurrent = p.CurrentPath ?? "";
+                IndexCurrent = p.Error is null ? p.CurrentPath ?? "" : $"{p.CurrentPath}: {p.Error}";
             });
 
             await svc.RunAsync(prog, ct);
@@ -400,7 +439,7 @@ public partial class MainViewModel : ObservableObject
         finally
         {
             IsIndexing = false;
-            IsBusy = false;
+            ExitBusy();
         }
     }
 
@@ -409,7 +448,7 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
-            IsBusy = true;
+            EnterBusy();
 
             var db = new AppDb(DbPath);
             await DbInitializer.EnsureCreatedAsync(db);
@@ -425,7 +464,7 @@ public partial class MainViewModel : ObservableObject
         }
         finally
         {
-            IsBusy = false;
+            ExitBusy();
         }
     }
 
@@ -436,7 +475,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            IsBusy = true;
+            EnterBusy();
 
             var db = new AppDb(DbPath);
             await DbInitializer.EnsureCreatedAsync(db);
@@ -452,7 +491,7 @@ public partial class MainViewModel : ObservableObject
         }
         finally
         {
-            IsBusy = false;
+            ExitBusy();
         }
     }
 
@@ -463,7 +502,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            IsBusy = true;
+            EnterBusy();
             IsDupeBuilding = true;
 
             DupePhase = "Starting...";
@@ -496,6 +535,9 @@ public partial class MainViewModel : ObservableObject
                 FramePercents: frames
             );
 
+            Status =
+    $"DupeBuild with tol={opt.TolSec}, min={opt.MinItems}, maxDist={opt.MaxAvgDist}, frames=[{string.Join(",", opt.FramePercents!)}]";
+
             var prog = new Progress<DupeBuildProgress>(p =>
             {
                 DupePhase = p.Phase;
@@ -520,7 +562,7 @@ public partial class MainViewModel : ObservableObject
         finally
         {
             IsDupeBuilding = false;
-            IsBusy = false;
+            ExitBusy();
         }
     }
     [RelayCommand]
@@ -535,6 +577,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
+            EnterBusy();
             var db = new AppDb(DbPath);
             await DbInitializer.EnsureCreatedAsync(db);
 
@@ -549,6 +592,10 @@ public partial class MainViewModel : ObservableObject
         {
             Status = $"Error: {ex.Message}";
         }
+        finally
+        {
+            ExitBusy();
+        }
     }
 
     [RelayCommand]
@@ -556,6 +603,7 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
+            EnterBusy();
             Status = "AddRoot: starting...";
 
             var lifetime = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
@@ -609,13 +657,17 @@ public partial class MainViewModel : ObservableObject
         {
             Status = $"AddRoot failed: {ex}";
         }
+        finally
+        {
+            ExitBusy();
+        }
     }
     [RelayCommand]
     public async Task LoadRootsAsync()
     {
         try
         {
-            IsBusy = true;
+            EnterBusy();
             Status = "Loading roots...";
 
             var db = new AppDb(DbPath);
@@ -645,7 +697,7 @@ public partial class MainViewModel : ObservableObject
         }
         finally
         {
-            IsBusy = false;
+            ExitBusy();
         }
     }
     private async Task LoadThumbnailsInternalAsync(CancellationToken ct)
@@ -654,7 +706,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            IsBusy = true;
+            EnterBusy();
             Status = "Loading thumbnails...";
 
             var db = new AppDb(DbPath);
@@ -694,7 +746,7 @@ public partial class MainViewModel : ObservableObject
         }
         finally
         {
-            IsBusy = false;
+            ExitBusy();
         }
     }
 
@@ -712,7 +764,7 @@ public partial class MainViewModel : ObservableObject
             {
                 ct.ThrowIfCancellationRequested();
 
-                var key = (m.MediaId, pos);
+                var key = (Path.GetFullPath(DbPath), m.MediaId, m.File.ModifiedUtc, pos);
 
                 if (_thumbCache.TryGetValue(key, out var cached))
                 {
@@ -735,8 +787,9 @@ public partial class MainViewModel : ObservableObject
                 {
                     png = await _extractor.ExtractFramePngAsync(m.Path, ts, ct);
                 }
-                catch
+                catch (Exception ex) when (MediaErrors.IsRecoverable(ex))
                 {
+                    System.Diagnostics.Trace.TraceWarning($"Thumbnail failed: {m.Path}: {ex}");
                     continue;
                 }
 
@@ -744,6 +797,12 @@ public partial class MainViewModel : ObservableObject
                 await using (var ms = new MemoryStream(png))
                     bmp = new Bitmap(ms);
 
+                if (_thumbCache.Count >= 300)
+                {
+                    var oldest = _thumbCache.First();
+                    oldest.Value.Dispose();
+                    _thumbCache.Remove(oldest.Key);
+                }
                 _thumbCache[key] = bmp;
 
                 await Dispatcher.UIThread.InvokeAsync(() => SetThumb(m, pos, bmp));
@@ -762,8 +821,8 @@ public partial class MainViewModel : ObservableObject
         // sort
         q = GroupSort switch
         {
-            "Newest" => q.OrderByDescending(g => g.GroupId), // Id steigt mit Zeit
-            _ => q.OrderByDescending(g => g.Members.Count)   // SizeDesc
+            "Newest" => q.OrderByDescending(g => g.GroupId),
+            _ => q.OrderByDescending(g => g.Members.Sum(m => m.SizeBytes))
         };
 
         // filter (match in any member path)
@@ -848,7 +907,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            IsBusy = true;
+            EnterBusy();
             Status = "Quarantining...";
 
             var db = new AppDb(DbPath);
@@ -874,7 +933,7 @@ public partial class MainViewModel : ObservableObject
         }
         finally
         {
-            IsBusy = false;
+            ExitBusy();
         }
     }
 

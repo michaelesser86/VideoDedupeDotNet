@@ -38,6 +38,11 @@ public sealed class DupeBuildService
         IProgress<DupeBuildProgress>? progress,
         CancellationToken ct)
     {
+        if (!double.IsFinite(opt.TolSec) || opt.TolSec < 0)
+            throw new ArgumentOutOfRangeException(nameof(opt.TolSec));
+        if (opt.MinItems < 2)
+            throw new ArgumentOutOfRangeException(nameof(opt.MinItems));
+
         await DbInitializer.EnsureCreatedAsync(_db);
 
         var positions = (opt.FramePercents is { Count: > 0 }
@@ -60,19 +65,13 @@ public sealed class DupeBuildService
             progress?.Report(new DupeBuildProgress("Clearing existing groups", 1, 1));
         }
 
-        // 2) Load candidates + bucketize
+        // 2) Load candidates and split only at gaps larger than the tolerance
         ct.ThrowIfCancellationRequested();
         progress?.Report(new DupeBuildProgress("Loading candidates", 1, 0));
         var files = await _db.ListMediaFilesForCandidatesAsync();
         progress?.Report(new DupeBuildProgress("Loading candidates", 1, 1));
 
-        // Bucket by resolution + rounded duration (0.1s)
-        var buckets = files
-            .Where(f => f.Width is not null && f.Height is not null && f.DurationSec is not null)
-             .GroupBy(f => (Width: f.Width!.Value, Height: f.Height!.Value, DurKey: Math.Round(f.DurationSec!.Value, 1)))
-            .Where(g => g.Count() >= opt.MinItems)
-            .OrderByDescending(g => g.Count())
-            .ToList();
+        var buckets = DurationCandidates.CreateRanges(files, f => f.DurationSec, opt.TolSec, opt.MinItems);
 
         int savedGroups = 0;
 
@@ -83,10 +82,10 @@ public sealed class DupeBuildService
 
             var b = buckets[bi];
             progress?.Report(new DupeBuildProgress(
-                Phase: "Processing buckets",
+                Phase: "Processing duration ranges",
                 Total: buckets.Count,
                 Done: bi,
-                Current: $"{b.Key.Width}x{b.Key.Height} durKey={b.Key.DurKey} count={b.Count()}"));
+                Current: $"{b[0].DurationSec:F2}–{b[^1].DurationSec:F2}s count={b.Count}"));
 
             var bucketFiles = b.OrderBy(f => f.DurationSec).ToList();
 
@@ -101,8 +100,8 @@ public sealed class DupeBuildService
                     .Where(f => Math.Abs(f.DurationSec!.Value - seedDur) <= opt.TolSec)
                     .ToList();
 
-                foreach (var c in cluster)
-                    bucketFiles.Remove(c);
+                // Unmatched candidates must remain available for the next seed.
+                bucketFiles.RemoveAt(0);
 
                 if (cluster.Count < opt.MinItems)
                     continue;
@@ -154,9 +153,11 @@ public sealed class DupeBuildService
                                 await _db.UpsertFrameHashAsync(f.Id, pos, computed);
                                 h = computed;
                             }
-                            catch
+                            catch (Exception ex) when (MediaErrors.IsRecoverable(ex))
                             {
-                                // keep going; missing a frame is ok
+                                System.Diagnostics.Trace.TraceWarning($"Frame {pos}% failed: {f.Path}: {ex}");
+                                progress?.Report(new DupeBuildProgress("Frame failed", cluster.Count, ci,
+                                    $"{f.Path} ({pos}%): {ex.Message}"));
                                 continue;
                             }
                         }
@@ -201,6 +202,9 @@ public sealed class DupeBuildService
                 if (final.Count < opt.MinItems)
                     continue;
 
+                foreach (var match in final)
+                    bucketFiles.Remove(match.File);
+
                 // 6) Save group + members
                 ct.ThrowIfCancellationRequested();
 
@@ -210,20 +214,19 @@ public sealed class DupeBuildService
                     Done: 0,
                     Current: $"members={final.Count}"));
 
-                var groupId = await _db.InsertDuplicateGroupAsync(
-                    algorithm: "dhash",
-                    frames: string.Join(",", positions),
-                    tolSec: opt.TolSec,
-                    maxAvgDist: opt.MaxAvgDist);
-
                 var members = final.Select(x => new AppDb.DuplicateMemberRow
                 {
-                    GroupId = groupId,
                     MediaFileId = x.File.Id,
                     AvgDist = x.Avg
                 });
 
-                await _db.InsertDuplicateMembersAsync(groupId, members);
+                await _db.InsertDuplicateGroupWithMembersAsync(
+                    algorithm: "dhash",
+                    frames: string.Join(",", positions),
+                    tolSec: opt.TolSec,
+                    maxAvgDist: opt.MaxAvgDist,
+                    members: members,
+                    ct: ct);
 
                 savedGroups++;
 

@@ -75,6 +75,8 @@ switch (cmd)
 
             var progress = new Progress<IndexProgress>(p =>
             {
+                if (p.Error is not null)
+                    Console.Error.WriteLine($"Probe failed: {p.CurrentPath}: {p.Error}");
                 if (p.Processed % 100 == 0)
                     Console.WriteLine($"Indexed {p.Processed}/{p.Discovered} ok={p.ProbedOk} fail={p.ProbedFail}");
             });
@@ -107,18 +109,13 @@ switch (cmd)
 
             var files = await db.ListMediaFilesForCandidatesAsync();
 
-            // bucket by resolution + rounded duration (0.1s)
-            var buckets = files
-                .GroupBy(f => (f.Width!.Value, f.Height!.Value, DurKey: Math.Round(f.DurationSec!.Value, 1)))
-                .Where(g => g.Count() >= minItems)
-                .OrderByDescending(g => g.Count())
-                .ToList();
+            var buckets = DurationCandidates.CreateRanges(files, f => f.DurationSec, tol, minItems);
 
             int groupNo = 0;
 
             foreach (var b in buckets)
             {
-                // refine: split bucket into sub-groups by tolerance around a seed duration
+                // Overlapping windows preserve pairs near the next seed.
                 var remainingFiles = b.OrderBy(f => f.DurationSec).ToList();
 
                 while (remainingFiles.Count >= minItems)
@@ -130,20 +127,16 @@ switch (cmd)
                         .Where(f => Math.Abs(f.DurationSec!.Value - seedDur) <= tol)
                         .ToList();
 
-                    // remove clustered
-                    foreach (var c in cluster)
-                        remainingFiles.Remove(c);
+                    remainingFiles.RemoveAt(0);
 
                     if (cluster.Count < minItems)
                         continue;
 
                     groupNo++;
 
-                    var w = b.Key.Item1;
-                    var h = b.Key.Item2;
                     var avgDur = cluster.Average(x => x.DurationSec!.Value);
 
-                    Console.WriteLine($"\nGroup {groupNo}  {w}x{h}  ~{avgDur:F2}s  items={cluster.Count}");
+                    Console.WriteLine($"\nGroup {groupNo}  ~{avgDur:F2}s  items={cluster.Count}");
 
                     foreach (var f in cluster.OrderByDescending(x => x.SizeBytes))
                     {
@@ -211,12 +204,7 @@ switch (cmd)
 
             var files = await db.ListMediaFilesForCandidatesAsync();
 
-            // Candidate buckets by (width,height,rounded duration)
-            var buckets = files
-                .GroupBy(f => (f.Width!.Value, f.Height!.Value, DurKey: Math.Round(f.DurationSec!.Value, 1)))
-                .Where(g => g.Count() >= minItems)
-                .OrderByDescending(g => g.Count())
-                .ToList();
+            var buckets = DurationCandidates.CreateRanges(files, f => f.DurationSec, tol, minItems);
 
             int groupNo = 0;
 
@@ -234,8 +222,7 @@ switch (cmd)
                         .Where(f => Math.Abs(f.DurationSec!.Value - seedDur) <= tol)
                         .ToList();
 
-                    foreach (var c in cluster)
-                        bucketFiles.Remove(c);
+                    bucketFiles.RemoveAt(0);
 
                     if (cluster.Count < minItems)
                         continue;
@@ -290,7 +277,7 @@ switch (cmd)
                                     await db.UpsertFrameHashAsync(f.Id, pos, computed);
                                     h = computed;
                                 }
-                                catch (Exception ex)
+                                catch (Exception ex) when (MediaErrors.IsRecoverable(ex))
                                 {
                                     Console.WriteLine($"Skip frame {pos}%: {f.Path} :: {ex.Message}");
                                     continue;
@@ -336,11 +323,11 @@ switch (cmd)
 
                     groupNo++;
 
-                    var w = b.Key.Item1;
-                    var hgt = b.Key.Item2;
+                    foreach (var match in final)
+                        bucketFiles.Remove(match.File);
                     var avgDur = final.Average(x => x.File.DurationSec!.Value);
 
-                    Console.WriteLine($"\nVerified Group {groupNo}  {w}x{hgt}  ~{avgDur:F2}s  items={final.Count}  tol={tol}  maxAvgDist={maxAvgDist}  frames={string.Join(",", positions)}");
+                    Console.WriteLine($"\nVerified Group {groupNo}  ~{avgDur:F2}s  items={final.Count}  tol={tol}  maxAvgDist={maxAvgDist}  frames={string.Join(",", positions)}");
 
                     foreach (var x in final.OrderByDescending(z => z.File.SizeBytes))
                     {
@@ -400,8 +387,9 @@ switch (cmd)
 
                         added++;
                     }
-                    catch
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     {
+                        Console.Error.WriteLine($"Skip file: {file}: {ex.Message}");
                         skipped++;
                     }
                 }

@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\VideoDedupe.Core\VideoDedupe.Core.csproj" />
+    <ProjectReference Include="..\..\src\VideoDedupe.Infrastructure\VideoDedupe.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

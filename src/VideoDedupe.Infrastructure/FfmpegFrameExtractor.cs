@@ -22,7 +22,7 @@ public sealed class FfmpegFrameExtractor
         {
             return await _tools.RunToBytesAsync(_tools.FfmpegPath, fastArgs, ct);
         }
-        catch
+        catch (ExternalToolException)
         {
             // Fallback: more accurate/reliable seek (-ss after -i)
             var slowArgs = $"-hide_banner -loglevel error -i \"{filePath}\" -ss {ts} -frames:v 1 -an -f image2pipe -vcodec png -";
