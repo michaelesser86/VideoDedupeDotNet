@@ -98,7 +98,8 @@
 
     <!-- ===================== TOP BAR ===================== -->
     <Border Grid.Row="0" CornerRadius="12" Padding="12" Background="{DynamicResource SurfaceBrush}">
-      <Grid ColumnDefinitions="*,Auto"
+      <!-- Keep the progress/status column stable while long file names update. -->
+      <Grid ColumnDefinitions="*,500"
             ColumnSpacing="14">
 
         <!-- Left: DB + Actions -->
