@@ -424,7 +424,7 @@
                           <MenuItem Header="{l:T 'Not a duplicate'}"
                                     Command="{Binding Owner.NotDuplicateCommand}" CommandParameter="{Binding .}"/>
                           <Separator/>
-                          <MenuItem Header="{l:T 'Delete…'}"
+                          <MenuItem Header="{l:T 'Delete'}"
                                     Command="{Binding Owner.DeleteFileCommand}" CommandParameter="{Binding .}"/>
                         </ContextMenu>
                       </Border.ContextMenu>
@@ -454,9 +454,9 @@
                             <Button Content="{l:T 'Keep'}"
                                     ToolTip.Tip="{l:T 'Always keep this file; clean-up will never move it.'}"
                                     Command="{Binding Owner.MarkKeepCommand}" CommandParameter="{Binding .}"/>
-                            <Button Content="{l:T 'Quarantine'}"
-                                    ToolTip.Tip="{l:T 'Move this file to the quarantine folder.'}"
-                                    Command="{Binding Owner.QuarantineCommand}" CommandParameter="{Binding .}"/>
+                            <Button Content="{l:T 'Delete'}"
+                                    ToolTip.Tip="{l:T 'Move this file to the Recycle Bin.'}"
+                                    Command="{Binding Owner.DeleteFileCommand}" CommandParameter="{Binding .}"/>
                             <Button Content="{l:T 'Open'}"
                                     Command="{Binding Owner.OpenFileCommand}" CommandParameter="{Binding .}"/>
                             <Button Content="⋯" ToolTip.Tip="{l:T 'More actions'}" AutomationProperties.Name="{l:T 'More actions'}">
@@ -466,11 +466,10 @@
                                             Command="{Binding Owner.ShowInExplorerCommand}" CommandParameter="{Binding .}"/>
                                   <MenuItem Header="{l:T 'Copy path'}"
                                             Command="{Binding Owner.CopyPathCommand}" CommandParameter="{Binding .}"/>
+                                  <MenuItem Header="{l:T 'Move to quarantine'}"
+                                            Command="{Binding Owner.QuarantineCommand}" CommandParameter="{Binding .}"/>
                                   <MenuItem Header="{l:T 'Not a duplicate'}"
                                             Command="{Binding Owner.NotDuplicateCommand}" CommandParameter="{Binding .}"/>
-                                  <Separator/>
-                                  <MenuItem Header="{l:T 'Delete…'}"
-                                            Command="{Binding Owner.DeleteFileCommand}" CommandParameter="{Binding .}"/>
                                 </MenuFlyout>
                               </Button.Flyout>
                             </Button>

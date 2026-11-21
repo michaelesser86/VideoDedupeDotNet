@@ -224,12 +224,12 @@ public partial class GroupsViewModel : ObservableObject
         if (m is null) return;
         try
         {
-            var recycle = OperatingSystem.IsWindows();
-            if (File.Exists(m.Path) && !await DesktopShell.ConfirmAsync(Loc.T("Delete file"),
-                    recycle
-                        ? Loc.F("Move this file to the Recycle Bin?\n\n{0}", m.Path)
-                        : Loc.F("Permanently delete this file? This cannot be undone.\n\n{0}", m.Path),
-                    recycle ? Loc.T("Move to Recycle Bin") : Loc.T("Delete permanently")))
+            // On Windows the file goes to the Recycle Bin and can be restored, so no question.
+            // Elsewhere deleting is permanent and still asks first.
+            if (!OperatingSystem.IsWindows() && File.Exists(m.Path) && !await DesktopShell.ConfirmAsync(
+                    Loc.T("Delete file"),
+                    Loc.F("Permanently delete this file? This cannot be undone.\n\n{0}", m.Path),
+                    Loc.T("Delete permanently")))
             {
                 _state.Status = Loc.T("Delete canceled.");
                 return;
