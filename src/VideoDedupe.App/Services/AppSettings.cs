@@ -20,6 +20,8 @@ public sealed class AppSettings
     public int DupeMinItems { get; set; } = Defaults.MinItems;
     public double DupeMaxAvgDist { get; set; } = Defaults.MaxAvgDist;
     public string DupeFramesCsv { get; set; } = string.Join(",", DupeBuildOptions.DefaultFramePercents);
+    public bool DupeMatchMirrored { get; set; } = Defaults.MatchMirrored;
+    public bool DupeUseAudio { get; set; } = Defaults.UseAudio;
 
     /// <summary>Missing or unreadable settings fall back to defaults instead of blocking startup.</summary>
     public static AppSettings Load(string path)

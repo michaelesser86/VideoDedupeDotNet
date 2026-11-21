@@ -26,6 +26,7 @@ if (remaining.Count == 0)
           dupe-build                [--db=<file>] [--tol=0.25] [--min=2] [--maxdist=10] [--frames=20,50,80]
                                     [--clear=true] [--refine-frames=6] [--scene-threshold=0.3]
                                     [--max-phash=16] [--margin=4] [--parallel=0]
+                                    [--mirror=true] [--audio=true] [--max-audio-ber=0.25]
           dupe-list                 [--db=<file>] [--take=20]
         """);
     return 1;
@@ -122,8 +123,16 @@ try
             {
                 Console.WriteLine($"\nGroup {g.Id}  algo={g.Algorithm} frames={g.Frames} tol={g.TolSec} maxAvgDist={g.MaxAvgDist} created={g.CreatedUtc}");
                 Console.WriteLine($"Members: {members.Count}");
-                foreach (var (f, dist) in members.OrderBy(x => x.AvgDist))
-                    Console.WriteLine($"  - avgDist={dist,5:F1}  {f.Path}");
+                foreach (var m in members.OrderBy(x => x.AvgDist))
+                {
+                    var notes = new List<string>();
+                    if (m.IsReference) notes.Add("reference");
+                    if (m.Mirrored) notes.Add("mirrored");
+                    if (m.PHashDist is double p) notes.Add($"scenes={p:F1}");
+                    if (m.AudioBer is double a) notes.Add($"audio={a:F2}");
+                    var suffix = notes.Count > 0 ? $"  [{string.Join(", ", notes)}]" : "";
+                    Console.WriteLine($"  - avgDist={m.AvgDist,5:F1}  {m.File.Path}{suffix}");
+                }
             }
             break;
         default:

@@ -203,6 +203,11 @@ DELETE FROM VisualHash
 WHERE MediaFileId IN (
     SELECT Id FROM MediaFile
     WHERE Path = @Path AND (SizeBytes IS NOT @SizeBytes OR ModifiedUtc IS NOT @ModifiedUtc)
+);
+DELETE FROM AudioPrint
+WHERE MediaFileId IN (
+    SELECT Id FROM MediaFile
+    WHERE Path = @Path AND (SizeBytes IS NOT @SizeBytes OR ModifiedUtc IS NOT @ModifiedUtc)
 );", args, tx);
         }
 
@@ -253,26 +258,29 @@ WHERE IsDeleted = 0 AND substr(Path, 1, length(@Prefix)) = @Prefix COLLATE NOCAS
             return rows.ToList();
         }
 
-        public async Task UpsertFrameHashAsync(long mediaFileId, int positionPct, ulong hash64)
-        {
-            using var cn = Open();
-            await cn.ExecuteAsync(@"
-                INSERT INTO FrameHash(MediaFileId, PositionPct, Hash64)
-                VALUES (@MediaFileId, @PositionPct, @Hash64)
-                ON CONFLICT(MediaFileId, PositionPct) DO UPDATE SET Hash64=excluded.Hash64;
-                ", new { MediaFileId = mediaFileId, PositionPct = positionPct, Hash64 = unchecked((long)hash64) });
-        }
+        /// <param name="mirrorHash64">Hash of the mirror image; defaults to <paramref name="hash64"/>
+        /// (a symmetric picture).</param>
+        public Task UpsertFrameHashAsync(long mediaFileId, int positionPct, ulong hash64, ulong? mirrorHash64 = null) =>
+            UpsertFrameHashesAsync(mediaFileId,
+                new Dictionary<int, Core.FrameHash> { [positionPct] = new(hash64, mirrorHash64 ?? hash64) });
 
         /// <summary>Stores several positions of one file in a single transaction.</summary>
-        public async Task UpsertFrameHashesAsync(long mediaFileId, IReadOnlyDictionary<int, ulong> hashes)
+        public async Task UpsertFrameHashesAsync(long mediaFileId, IReadOnlyDictionary<int, Core.FrameHash> hashes)
         {
             using var cn = Open();
             using var tx = cn.BeginTransaction();
             await cn.ExecuteAsync(@"
-                INSERT INTO FrameHash(MediaFileId, PositionPct, Hash64)
-                VALUES (@MediaFileId, @PositionPct, @Hash64)
-                ON CONFLICT(MediaFileId, PositionPct) DO UPDATE SET Hash64=excluded.Hash64;",
-                hashes.Select(h => new { MediaFileId = mediaFileId, PositionPct = h.Key, Hash64 = unchecked((long)h.Value) }),
+                INSERT INTO FrameHash(MediaFileId, PositionPct, Hash64, MirrorHash64)
+                VALUES (@MediaFileId, @PositionPct, @Hash64, @MirrorHash64)
+                ON CONFLICT(MediaFileId, PositionPct) DO UPDATE SET
+                    Hash64=excluded.Hash64, MirrorHash64=excluded.MirrorHash64;",
+                hashes.Select(h => new
+                {
+                    MediaFileId = mediaFileId,
+                    PositionPct = h.Key,
+                    Hash64 = unchecked((long)h.Value.Normal),
+                    MirrorHash64 = unchecked((long)h.Value.Mirrored)
+                }),
                 tx);
             tx.Commit();
         }
@@ -288,24 +296,95 @@ WHERE IsDeleted = 0 AND substr(Path, 1, length(@Prefix)) = @Prefix COLLATE NOCAS
         }
 
         /// <summary>All cached frame hashes, keyed by file and position (one query instead of one per frame).</summary>
-        public async Task<Dictionary<long, Dictionary<int, ulong>>> GetAllFrameHashesAsync()
+        /// <remarks>Rows without a mirror hash (older databases) are left out, so they get recomputed.</remarks>
+        public async Task<Dictionary<long, Dictionary<int, Core.FrameHash>>> GetAllFrameHashesAsync()
         {
             using var cn = Open();
-            var rows = await cn.QueryAsync<(long MediaFileId, int PositionPct, long Hash64)>(
-                "SELECT MediaFileId, PositionPct, Hash64 FROM FrameHash;");
+            var rows = await cn.QueryAsync<(long MediaFileId, int PositionPct, long Hash64, long MirrorHash64)>(
+                "SELECT MediaFileId, PositionPct, Hash64, MirrorHash64 FROM FrameHash WHERE MirrorHash64 IS NOT NULL;");
             return rows.GroupBy(r => r.MediaFileId).ToDictionary(
                 g => g.Key,
-                g => g.ToDictionary(r => r.PositionPct, r => unchecked((ulong)r.Hash64)));
+                g => g.ToDictionary(r => r.PositionPct,
+                    r => new Core.FrameHash(unchecked((ulong)r.Hash64), unchecked((ulong)r.MirrorHash64))));
         }
 
-        public async Task UpsertVisualHashAsync(long mediaFileId, string strategy, int slot, ulong hash64)
+        public Task UpsertVisualHashAsync(long mediaFileId, string strategy, int slot, ulong hash64) =>
+            UpsertVisualHashesAsync(mediaFileId, strategy, new Dictionary<int, ulong> { [slot] = hash64 });
+
+        public async Task UpsertVisualHashesAsync(long mediaFileId, string strategy, IReadOnlyDictionary<int, ulong> hashes)
         {
             using var cn = Open();
+            using var tx = cn.BeginTransaction();
             await cn.ExecuteAsync(@"
 INSERT INTO VisualHash(MediaFileId, Strategy, Slot, Hash64)
 VALUES (@MediaFileId, @Strategy, @Slot, @Hash64)
 ON CONFLICT(MediaFileId, Strategy, Slot) DO UPDATE SET Hash64=excluded.Hash64;",
-                new { MediaFileId = mediaFileId, Strategy = strategy, Slot = slot, Hash64 = unchecked((long)hash64) });
+                hashes.Select(h => new { MediaFileId = mediaFileId, Strategy = strategy, Slot = h.Key, Hash64 = unchecked((long)h.Value) }),
+                tx);
+            tx.Commit();
+        }
+
+        public async Task<byte[]?> GetAudioPrintAsync(long mediaFileId, string strategy)
+        {
+            using var cn = Open();
+            return await cn.ExecuteScalarAsync<byte[]?>(
+                "SELECT Data FROM AudioPrint WHERE MediaFileId=@Id AND Strategy=@Strategy",
+                new { Id = mediaFileId, Strategy = strategy });
+        }
+
+        public async Task UpsertAudioPrintAsync(long mediaFileId, string strategy, byte[] data)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(@"
+INSERT INTO AudioPrint(MediaFileId, Strategy, Data) VALUES (@Id, @Strategy, @Data)
+ON CONFLICT(MediaFileId) DO UPDATE SET Strategy=excluded.Strategy, Data=excluded.Data;",
+                new { Id = mediaFileId, Strategy = strategy, Data = data });
+        }
+
+        /// <summary>Records that every pair among <paramref name="mediaFileIds"/> shows different videos.</summary>
+        public Task MarkNotDuplicateAsync(IEnumerable<long> mediaFileIds)
+        {
+            var ids = mediaFileIds.Distinct().Order().ToArray();
+            return AddNotDuplicatePairsAsync(
+                from a in ids from b in ids where a < b select (a, b));
+        }
+
+        /// <summary>Records that <paramref name="mediaFileId"/> differs from each of <paramref name="others"/>.</summary>
+        public Task MarkNotDuplicateOfAsync(long mediaFileId, IEnumerable<long> others) =>
+            AddNotDuplicatePairsAsync(others.Where(o => o != mediaFileId).Distinct()
+                .Select(o => (Math.Min(o, mediaFileId), Math.Max(o, mediaFileId))));
+
+        private async Task AddNotDuplicatePairsAsync(IEnumerable<(long A, long B)> pairs)
+        {
+            using var cn = Open();
+            using var tx = cn.BeginTransaction();
+            var utc = DateTime.UtcNow.ToString("O");
+            await cn.ExecuteAsync(@"
+INSERT INTO NotDuplicatePair(FileA, FileB, DecidedUtc) VALUES (@A, @B, @Utc)
+ON CONFLICT(FileA, FileB) DO NOTHING;",
+                pairs.Select(p => new { p.A, p.B, Utc = utc }), tx);
+            tx.Commit();
+        }
+
+        /// <summary>All pairs marked as different videos, smaller id first.</summary>
+        public async Task<HashSet<(long A, long B)>> GetNotDuplicatePairsAsync()
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<(long A, long B)>("SELECT FileA, FileB FROM NotDuplicatePair;");
+            return rows.ToHashSet();
+        }
+
+        public async Task RemoveGroupMemberAsync(long groupId, long mediaFileId)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync("DELETE FROM DuplicateMember WHERE GroupId=@G AND MediaFileId=@F;",
+                new { G = groupId, F = mediaFileId });
+        }
+
+        public async Task DeleteGroupAsync(long groupId)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync("DELETE FROM DuplicateGroup WHERE Id=@G;", new { G = groupId });
         }
 
         public async Task<Dictionary<int, ulong>> GetVisualHashesAsync(long mediaFileId, string strategy)
@@ -348,10 +427,18 @@ RETURNING Id;
             {
                 ct.ThrowIfCancellationRequested();
                 await cn.ExecuteAsync(new CommandDefinition(@"
-INSERT INTO DuplicateMember(GroupId, MediaFileId, AvgDist)
-VALUES (@GroupId, @MediaFileId, @AvgDist);
-", new { GroupId = groupId, m.MediaFileId, m.AvgDist },
-                    transaction: tx, cancellationToken: ct));
+INSERT INTO DuplicateMember(GroupId, MediaFileId, AvgDist, Mirrored, PHashDist, AudioBer, IsReference)
+VALUES (@GroupId, @MediaFileId, @AvgDist, @Mirrored, @PHashDist, @AudioBer, @IsReference);
+", new
+                {
+                    GroupId = groupId,
+                    m.MediaFileId,
+                    m.AvgDist,
+                    Mirrored = m.Mirrored ? 1 : 0,
+                    m.PHashDist,
+                    m.AudioBer,
+                    IsReference = m.IsReference ? 1 : 0
+                }, transaction: tx, cancellationToken: ct));
             }
 
             ct.ThrowIfCancellationRequested();
@@ -363,6 +450,10 @@ VALUES (@GroupId, @MediaFileId, @AvgDist);
         {
             public long GroupId { get; set; }
             public double AvgDist { get; set; }
+            public long Mirrored { get; set; }
+            public double? PHashDist { get; set; }
+            public double? AudioBer { get; set; }
+            public long IsReference { get; set; }
             public long Id { get; set; }
             public string Path { get; set; } = "";
             public long SizeBytes { get; set; }
@@ -429,7 +520,7 @@ UPDATE MediaFile SET IsDeleted=1 WHERE Id=@Id;",
                 new { Id = mediaFileId });
         }
 
-        public async Task<List<(DuplicateGroupRow Group, List<(MediaFileRow File, double AvgDist)> Members)>> ListDuplicateGroupsWithMembersAsync(int? take = null)
+        public async Task<List<(DuplicateGroupRow Group, List<GroupMember> Members)>> ListDuplicateGroupsWithMembersAsync(int? take = null)
         {
             using var cn = Open();
 
@@ -451,6 +542,10 @@ ORDER BY Id DESC
 SELECT
   m.GroupId as GroupId,
   m.AvgDist as AvgDist,
+  m.Mirrored as Mirrored,
+  m.PHashDist as PHashDist,
+  m.AudioBer as AudioBer,
+  m.IsReference as IsReference,
   f.Id as Id,
   f.Path as Path,
   f.SizeBytes as SizeBytes,
@@ -469,11 +564,11 @@ ORDER BY m.AvgDist ASC;
 ", new { GroupIds = groups.Select(g => g.Id).ToArray() }))
                 .ToLookup(r => r.GroupId);
 
-            var result = new List<(DuplicateGroupRow, List<(MediaFileRow, double)>)>();
+            var result = new List<(DuplicateGroupRow, List<GroupMember>)>();
 
             foreach (var g in groups)
             {
-                var members = membersByGroup[g.Id].Select(r =>
+                var members = membersByGroup[g.Id].Select(r => new GroupMember
                 (
                     new MediaFileRow
                     {
@@ -489,7 +584,11 @@ ORDER BY m.AvgDist ASC;
                         VideoCodec = r.VideoCodec,
                         Container = r.Container
                     },
-                    r.AvgDist
+                    r.AvgDist,
+                    r.Mirrored != 0,
+                    r.PHashDist,
+                    r.AudioBer,
+                    r.IsReference != 0
                 )).ToList();
 
                 result.Add((g, members));
@@ -512,7 +611,20 @@ ORDER BY m.AvgDist ASC;
         {
             public long GroupId { get; set; }
             public long MediaFileId { get; set; }
+            /// <summary>Average dHash distance to the group's reference file (0–64).</summary>
             public double AvgDist { get; set; }
+            /// <summary>The file matched as a mirror image of the reference.</summary>
+            public bool Mirrored { get; set; }
+            /// <summary>Scene pHash distance, when a borderline match was re-checked.</summary>
+            public double? PHashDist { get; set; }
+            /// <summary>Audio bit error rate, when the soundtrack was compared.</summary>
+            public double? AudioBer { get; set; }
+            /// <summary>The file the others were compared with.</summary>
+            public bool IsReference { get; set; }
         }
+
+        /// <summary>A group member with the evidence that put it there.</summary>
+        public sealed record GroupMember(MediaFileRow File, double AvgDist, bool Mirrored = false,
+            double? PHashDist = null, double? AudioBer = null, bool IsReference = false);
     }
 }

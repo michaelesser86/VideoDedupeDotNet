@@ -88,6 +88,34 @@ CREATE TABLE IF NOT EXISTS ReviewDecision (
 ");
 
 
+        // Rows from before mirror detection have no mirror hash; they count as not cached.
+        await db.EnsureColumnAsync("FrameHash", "MirrorHash64", "INTEGER NULL");
+        // Why a member belongs to its group, shown in the app.
+        await db.EnsureColumnAsync("DuplicateMember", "Mirrored", "INTEGER NOT NULL DEFAULT 0");
+        await db.EnsureColumnAsync("DuplicateMember", "PHashDist", "REAL NULL");
+        await db.EnsureColumnAsync("DuplicateMember", "AudioBer", "REAL NULL");
+        await db.EnsureColumnAsync("DuplicateMember", "IsReference", "INTEGER NOT NULL DEFAULT 0");
+
+        await db.ExecuteAsync(@"
+CREATE TABLE IF NOT EXISTS AudioPrint (
+  MediaFileId INTEGER PRIMARY KEY,
+  Strategy TEXT NOT NULL,
+  Data BLOB NOT NULL,                -- empty fingerprint = file has no usable audio
+  FOREIGN KEY(MediaFileId) REFERENCES MediaFile(Id) ON DELETE CASCADE
+);
+
+-- Pairs the user marked as different videos; a build never groups them again.
+CREATE TABLE IF NOT EXISTS NotDuplicatePair (
+  FileA INTEGER NOT NULL,            -- always the smaller id
+  FileB INTEGER NOT NULL,
+  DecidedUtc TEXT NOT NULL,
+  PRIMARY KEY(FileA, FileB),
+  CHECK(FileA < FileB),
+  FOREIGN KEY(FileA) REFERENCES MediaFile(Id) ON DELETE CASCADE,
+  FOREIGN KEY(FileB) REFERENCES MediaFile(Id) ON DELETE CASCADE
+);
+");
+
         await db.EnsureColumnAsync("MediaFile", "DurationSec", "REAL");
         await db.EnsureColumnAsync("MediaFile", "Width", "INTEGER");
         await db.EnsureColumnAsync("MediaFile", "Height", "INTEGER");

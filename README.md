@@ -22,6 +22,14 @@ and helps you keep the best one. Desktop app (Avalonia) plus a command-line tool
 4. **Refinement**: matches close to the threshold (within `--margin`) are re-checked with
    perceptual hashes of scene-change frames (`--refine-frames`, `--scene-threshold`,
    `--max-phash`). Scenes are matched by best fit, so a re-encode with an extra cut still matches.
+   What the scenes do not confirm is checked against the soundtrack: two minutes around the
+   middle of each file are fingerprinted and compared (`--audio`, `--max-audio-ber`).
+5. **Mirrored copies**: every frame hash is also computed for the mirror image, so videos
+   flipped left to right match too (`--mirror`).
+
+Pairs you mark as "not a duplicate" in the app are remembered and never grouped again.
+"Clean up all groups" keeps the best copy of each group (or the files marked as keep) and moves
+the others to the quarantine folder after showing the full list.
 
 Hashes are cached in the database and recomputed only when a file changes or the hash algorithm
 version changes. Hashing runs several ffmpeg processes in parallel (`--parallel`, default: half

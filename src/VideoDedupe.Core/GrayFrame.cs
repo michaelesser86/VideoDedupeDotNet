@@ -24,6 +24,19 @@ public sealed class GrayFrame
 
     public byte this[int x, int y] => Pixels[y * Width + x];
 
+    /// <summary>The frame flipped left to right (a mirrored re-upload).</summary>
+    public GrayFrame MirrorHorizontal()
+    {
+        var mirrored = new byte[Pixels.Length];
+        for (var y = 0; y < Height; y++)
+        {
+            var row = y * Width;
+            for (var x = 0; x < Width; x++)
+                mirrored[row + x] = Pixels[row + Width - 1 - x];
+        }
+        return new GrayFrame(Width, Height, mirrored);
+    }
+
     /// <summary>Parses a binary PGM (P5) image with a maximum value of 255.</summary>
     /// <exception cref="InvalidDataException">The bytes are not such an image.</exception>
     public static GrayFrame ParsePgm(ReadOnlySpan<byte> data)

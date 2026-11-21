@@ -15,7 +15,10 @@ public sealed record DupeBuildOptions(
     double SceneThreshold = 0.30,
     double MaxPHashDist = 16.0,
     double BorderlineMargin = 4.0,
-    int MaxParallelism = 0
+    int MaxParallelism = 0,
+    bool UseAudio = true,
+    double MaxAudioBer = 0.25,
+    bool MatchMirrored = true
 )
 {
     public static readonly IReadOnlyList<int> DefaultFramePercents = [20, 50, 80];
@@ -37,13 +40,14 @@ public sealed record DupeBuildProgress(
 
 public sealed class DupeBuildService
 {
-    private const string Algorithm = "dhash+scene-phash";
+    private const string Algorithm = "dhash+scene-phash+audio";
 
     private readonly AppDb _db;
     private readonly FfmpegFrameExtractor _extractor;
     private readonly DHashService _hasher;
     private readonly PHashService _pHasher;
     private readonly SceneFrameSelector _sceneSelector;
+    private readonly AudioPrintExtractor _audio;
 
     public DupeBuildService(AppDb db, FfmpegFrameExtractor extractor, DHashService hasher)
     {
@@ -52,6 +56,14 @@ public sealed class DupeBuildService
         _hasher = hasher;
         _pHasher = new PHashService();
         _sceneSelector = new SceneFrameSelector(extractor.Tools);
+        _audio = new AudioPrintExtractor(extractor.Tools);
+    }
+
+    /// <summary>One file's distance to a group's reference file.</summary>
+    internal sealed record Match(AppDb.MediaFileRow File, double Avg, bool Mirrored)
+    {
+        public double? PHashDist { get; set; }
+        public double? AudioBer { get; set; }
     }
 
     public async Task<int> RunAsync(
@@ -76,6 +88,7 @@ public sealed class DupeBuildService
         ct.ThrowIfCancellationRequested();
         progress?.Report(new DupeBuildProgress("Loading candidates", 1, 0));
         var files = await _db.ListMediaFilesForCandidatesAsync();
+        var notDuplicates = await _db.GetNotDuplicatePairsAsync();
         var candidateTotal = files.Count;
         progress?.Report(new DupeBuildProgress("Loading candidates", 1, 1,
             OverallTotal: candidateTotal, OverallDone: 0));
@@ -93,7 +106,8 @@ public sealed class DupeBuildService
             candidateTotal, progress, ct);
 
         // 4) Cluster
-        var sceneHashes = new ConcurrentDictionary<long, Lazy<Task<Dictionary<int, ulong>>>>();
+        var sceneHashes = new ConcurrentDictionary<(long, bool), Lazy<Task<Dictionary<int, ulong>>>>();
+        var audioPrints = new ConcurrentDictionary<long, Lazy<Task<AudioFingerprint?>>>();
         int savedGroups = 0;
 
         for (int bi = 0; bi < buckets.Count; bi++)
@@ -139,35 +153,31 @@ public sealed class DupeBuildService
                 // 5) Distance filter relative to seed
                 var seedHashes = verified[0].Hashes;
                 var preliminary = verified
-                    .Select(v => (v.File, Avg: AverageDistance(seedHashes, v.Hashes)))
+                    .Select(v => Compare(seedHashes, v.Hashes, v.File, opt.MatchMirrored))
                     .Where(x => x.Avg <= opt.MaxAvgDist + opt.BorderlineMargin)
                     .OrderBy(x => x.Avg)
                     .ToList();
 
                 // dHash is cheap and narrows the set. Only values near its decision
-                // boundary are refined with scene-selected pHashes.
-                var refined = new Dictionary<long, double>();
+                // boundary are refined with scene-selected pHashes, and what that does not
+                // confirm with a comparison of the soundtracks.
                 var refinementCandidates = preliminary.Where(x => x.Avg > opt.MaxAvgDist - opt.BorderlineMargin).ToList();
                 if (refinementCandidates.Count > 0)
                 {
                     progress?.Report(new DupeBuildProgress("Refining borderline matches", refinementCandidates.Count, 0,
                         seed.Path, candidateTotal, candidateTotal));
-                    var involved = refinementCandidates.Select(c => c.File).Prepend(seed).DistinctBy(f => f.Id).ToList();
-                    var sceneResults = await ParallelMapAsync(involved, opt.EffectiveParallelism,
-                        f => GetScenePHashesCachedAsync(sceneHashes, f, opt, ct), ct);
-                    var seedSceneHashes = sceneResults[seed.Id];
-                    foreach (var candidate in refinementCandidates)
-                    {
-                        if (PHashService.SceneSetDistance(seedSceneHashes.Values, sceneResults[candidate.File.Id].Values)
-                            is double pHashDistance)
-                            refined[candidate.File.Id] = pHashDistance;
-                    }
+                    await RefineWithScenesAsync(seed, refinementCandidates, sceneHashes, opt, ct);
+
+                    var unconfirmed = refinementCandidates.Where(c => c.Avg > opt.MaxAvgDist && !ConfirmedByScenes(c, opt)).ToList();
+                    if (opt.UseAudio && unconfirmed.Count > 0)
+                        await RefineWithAudioAsync(seed, unconfirmed, audioPrints, opt, ct);
                 }
 
-                var final = preliminary
-                    .Where(x => x.Avg <= opt.MaxAvgDist ||
-                        (refined.TryGetValue(x.File.Id, out var pHashDistance) && pHashDistance <= opt.MaxPHashDist))
+                var accepted = preliminary
+                    .Where(x => x.Avg <= opt.MaxAvgDist || ConfirmedByScenes(x, opt) ||
+                        x.AudioBer <= opt.MaxAudioBer)
                     .ToList();
+                var final = ApplyNotDuplicate(seed.Id, accepted, notDuplicates);
 
                 if (final.Count < opt.MinItems)
                     continue;
@@ -182,7 +192,15 @@ public sealed class DupeBuildService
                     frames: $"dhash={string.Join(",", positions)};scene-phash={opt.RefinementFrames}",
                     tolSec: opt.TolSec,
                     maxAvgDist: opt.MaxAvgDist,
-                    members: final.Select(x => new AppDb.DuplicateMemberRow { MediaFileId = x.File.Id, AvgDist = x.Avg }),
+                    members: final.Select(x => new AppDb.DuplicateMemberRow
+                    {
+                        MediaFileId = x.File.Id,
+                        AvgDist = x.Avg,
+                        Mirrored = x.Mirrored,
+                        PHashDist = x.PHashDist,
+                        AudioBer = x.AudioBer,
+                        IsReference = x.File.Id == seed.Id
+                    }),
                     ct: ct);
 
                 savedGroups++;
@@ -202,6 +220,79 @@ public sealed class DupeBuildService
         return savedGroups;
     }
 
+    private static bool ConfirmedByScenes(Match m, DupeBuildOptions opt) => m.PHashDist <= opt.MaxPHashDist;
+
+    /// <summary>
+    /// Distance of <paramref name="file"/> to the reference, as is or as a mirror image,
+    /// whichever is closer.
+    /// </summary>
+    internal static Match Compare(Dictionary<int, FrameHash> reference, Dictionary<int, FrameHash> other,
+        AppDb.MediaFileRow file, bool matchMirrored)
+    {
+        var normal = AverageDistance(reference, other, mirrored: false);
+        if (!matchMirrored)
+            return new Match(file, normal, false);
+        var mirrored = AverageDistance(reference, other, mirrored: true);
+        return mirrored < normal ? new Match(file, mirrored, true) : new Match(file, normal, false);
+    }
+
+    /// <summary>
+    /// Drops files the user marked as different from the seed or from a closer member. The seed
+    /// always stays; the others are taken by increasing distance.
+    /// </summary>
+    internal static List<Match> ApplyNotDuplicate(long seedId, IEnumerable<Match> matches,
+        IReadOnlySet<(long A, long B)> notDuplicates)
+    {
+        var result = new List<Match>();
+        foreach (var m in matches.OrderBy(m => m.File.Id != seedId).ThenBy(m => m.Avg))
+        {
+            if (result.Count == 0 && m.File.Id != seedId)
+                return [];
+            if (result.All(r => !notDuplicates.Contains(PairKey(r.File.Id, m.File.Id))))
+                result.Add(m);
+        }
+        return result;
+    }
+
+    internal static (long, long) PairKey(long a, long b) => a < b ? (a, b) : (b, a);
+
+    private async Task RefineWithScenesAsync(AppDb.MediaFileRow seed, IReadOnlyList<Match> candidates,
+        ConcurrentDictionary<(long, bool), Lazy<Task<Dictionary<int, ulong>>>> cache, DupeBuildOptions opt,
+        CancellationToken ct)
+    {
+        // A mirrored candidate is compared with mirror-image scene hashes; the seed stays as is.
+        var requests = candidates.Select(c => (c.File, c.Mirrored)).Prepend((seed, false))
+            .DistinctBy(r => (r.Item1.Id, r.Item2)).ToList();
+        var results = new ConcurrentDictionary<(long, bool), Dictionary<int, ulong>>();
+        await Parallel.ForEachAsync(requests,
+            new ParallelOptions { MaxDegreeOfParallelism = opt.EffectiveParallelism, CancellationToken = ct },
+            async (r, _) => results[(r.Item1.Id, r.Item2)] = await cache.GetOrAdd((r.Item1.Id, r.Item2),
+                _ => new Lazy<Task<Dictionary<int, ulong>>>(() => GetScenePHashesAsync(r.Item1, r.Item2, opt, ct))).Value);
+
+        var seedScenes = results[(seed.Id, false)];
+        foreach (var candidate in candidates)
+            candidate.PHashDist = PHashService.SceneSetDistance(seedScenes.Values,
+                results[(candidate.File.Id, candidate.Mirrored)].Values);
+    }
+
+    private async Task RefineWithAudioAsync(AppDb.MediaFileRow seed, IReadOnlyList<Match> candidates,
+        ConcurrentDictionary<long, Lazy<Task<AudioFingerprint?>>> cache, DupeBuildOptions opt, CancellationToken ct)
+    {
+        var files = candidates.Select(c => c.File).Prepend(seed).DistinctBy(f => f.Id).ToList();
+        var prints = await ParallelMapAsync(files, opt.EffectiveParallelism,
+            f => cache.GetOrAdd(f.Id, _ => new Lazy<Task<AudioFingerprint?>>(() => GetAudioPrintAsync(f, ct))).Value, ct);
+        if (prints[seed.Id] is not { IsEmpty: false } seedPrint)
+            return;
+
+        // Durations differ by at most the tolerance, so the windows around the middle line up
+        // within half of it; a few seconds of slack also cover differently trimmed silence.
+        var maxOffset = (int)Math.Ceiling((opt.TolSec / 2 + 3) / AudioFingerprint.SecondsPerWord);
+        var minOverlap = (int)(10 / AudioFingerprint.SecondsPerWord);
+        foreach (var candidate in candidates)
+            if (prints[candidate.File.Id] is { IsEmpty: false } print)
+                candidate.AudioBer = AudioFingerprint.BitErrorRate(seedPrint, print, maxOffset, minOverlap);
+    }
+
     private static void Validate(DupeBuildOptions opt)
     {
         if (!double.IsFinite(opt.TolSec) || opt.TolSec < 0)
@@ -210,7 +301,8 @@ public sealed class DupeBuildService
             throw new ArgumentOutOfRangeException(nameof(opt.MinItems));
         if (opt.RefinementFrames < 1 || !double.IsFinite(opt.SceneThreshold) || opt.SceneThreshold < 0 ||
             !double.IsFinite(opt.MaxPHashDist) || opt.MaxPHashDist < 0 ||
-            !double.IsFinite(opt.BorderlineMargin) || opt.BorderlineMargin < 0 || opt.MaxParallelism < 0)
+            !double.IsFinite(opt.BorderlineMargin) || opt.BorderlineMargin < 0 || opt.MaxParallelism < 0 ||
+            !double.IsFinite(opt.MaxAudioBer) || opt.MaxAudioBer is < 0 or > 1)
             throw new ArgumentOutOfRangeException(nameof(opt));
     }
 
@@ -242,7 +334,7 @@ public sealed class DupeBuildService
         return sortedBucket.Where((_, i) => include[i]);
     }
 
-    private async Task<Dictionary<long, Dictionary<int, ulong>?>> HashAllAsync(
+    private async Task<Dictionary<long, Dictionary<int, FrameHash>?>> HashAllAsync(
         IReadOnlyList<AppDb.MediaFileRow> files, IReadOnlyList<int> positions, DupeBuildOptions opt,
         int alreadyDone, int overallTotal, IProgress<DupeBuildProgress>? progress, CancellationToken ct)
     {
@@ -262,14 +354,14 @@ public sealed class DupeBuildService
         return results.ToDictionary(r => r.Key, r => r.Value);
     }
 
-    private async Task<Dictionary<int, ulong>?> HashFileAsync(AppDb.MediaFileRow f,
-        IReadOnlyList<int> positions, Dictionary<int, ulong>? cached, CancellationToken ct)
+    private async Task<Dictionary<int, FrameHash>?> HashFileAsync(AppDb.MediaFileRow f,
+        IReadOnlyList<int> positions, Dictionary<int, FrameHash>? cached, CancellationToken ct)
     {
         if (f.DurationSec is not double dur || dur <= 1.0 || string.IsNullOrWhiteSpace(f.Path) || !File.Exists(f.Path))
             return null;
 
-        var map = new Dictionary<int, ulong>();
-        var computed = new Dictionary<int, ulong>();
+        var map = new Dictionary<int, FrameHash>();
+        var computed = new Dictionary<int, FrameHash>();
         foreach (var pos in positions)
             if (cached is not null && cached.TryGetValue(pos, out var known))
                 map[pos] = known;
@@ -282,7 +374,7 @@ public sealed class DupeBuildService
             var frames = await _extractor.ExtractGrayFramesAsync(f.Path, timestamps, ct);
             for (var i = 0; i < missing.Count; i++)
                 if (frames[i] is { } frame)
-                    map[missing[i]] = computed[missing[i]] = _hasher.ComputeDHash64(frame);
+                    map[missing[i]] = computed[missing[i]] = _hasher.ComputeHashes(frame);
         }
 
         if (computed.Count > 0)
@@ -290,14 +382,15 @@ public sealed class DupeBuildService
         return map.Count > 0 ? map : null;
     }
 
-    private static double AverageDistance(Dictionary<int, ulong> a, Dictionary<int, ulong> b)
+    private static double AverageDistance(Dictionary<int, FrameHash> reference, Dictionary<int, FrameHash> other,
+        bool mirrored)
     {
         double sum = 0;
         var shared = 0;
-        foreach (var (position, hash) in a)
+        foreach (var (position, hash) in reference)
         {
-            if (!b.TryGetValue(position, out var other)) continue;
-            sum += DHashService.HammingDistance(hash, other);
+            if (!other.TryGetValue(position, out var o)) continue;
+            sum += DHashService.HammingDistance(hash.Normal, mirrored ? o.Mirrored : o.Normal);
             shared++;
         }
         return shared == 0 ? double.PositiveInfinity : sum / shared;
@@ -316,33 +409,45 @@ public sealed class DupeBuildService
 
     // Each file's scene hashes are computed once per run, even when several seeds ask for it
     // concurrently. Incomplete results are kept too: re-running scene detection would fail
-    // the same way and decode the whole video again.
-    private Task<Dictionary<int, ulong>> GetScenePHashesCachedAsync(
-        ConcurrentDictionary<long, Lazy<Task<Dictionary<int, ulong>>>> runCache,
-        AppDb.MediaFileRow file, DupeBuildOptions opt, CancellationToken ct) =>
-        runCache.GetOrAdd(file.Id, _ => new Lazy<Task<Dictionary<int, ulong>>>(
-            () => GetScenePHashesAsync(file, opt, ct))).Value;
-
-    private async Task<Dictionary<int, ulong>> GetScenePHashesAsync(AppDb.MediaFileRow file, DupeBuildOptions opt,
-        CancellationToken ct)
+    // the same way and decode the whole video again. Both orientations come from the same
+    // frames, so asking for the mirror image later costs no second scene detection.
+    private async Task<Dictionary<int, ulong>> GetScenePHashesAsync(AppDb.MediaFileRow file, bool mirrored,
+        DupeBuildOptions opt, CancellationToken ct)
     {
         var strategy = SceneStrategyKey(opt);
-        var cached = await _db.GetVisualHashesAsync(file.Id, strategy);
+        var mirrorStrategy = strategy + ";mirror";
+        var cached = await _db.GetVisualHashesAsync(file.Id, mirrored ? mirrorStrategy : strategy);
         if (cached.Count >= opt.RefinementFrames)
             return cached;
 
         var timestamps = await _sceneSelector.SelectAsync(file.Path, file.DurationSec!.Value,
             opt.RefinementFrames, opt.SceneThreshold, ct);
-        var slots = Enumerable.Range(0, timestamps.Count).Where(slot => !cached.ContainsKey(slot)).ToList();
-        var frames = await _extractor.ExtractGrayFramesAsync(file.Path, slots.Select(s => timestamps[s]).ToList(), ct);
-        for (var i = 0; i < slots.Count; i++)
+        var frames = await _extractor.ExtractGrayFramesAsync(file.Path, timestamps, ct);
+        var normal = new Dictionary<int, ulong>();
+        var mirror = new Dictionary<int, ulong>();
+        for (var slot = 0; slot < frames.Count; slot++)
         {
-            if (frames[i] is not { } frame) continue;
-            var hash = _pHasher.ComputePHash64(frame);
-            await _db.UpsertVisualHashAsync(file.Id, strategy, slots[i], hash);
-            cached[slots[i]] = hash;
+            if (frames[slot] is not { } frame) continue;
+            normal[slot] = _pHasher.ComputePHash64(frame);
+            mirror[slot] = _pHasher.ComputePHash64(frame.MirrorHorizontal());
         }
-        return cached;
+        await _db.UpsertVisualHashesAsync(file.Id, strategy, normal);
+        await _db.UpsertVisualHashesAsync(file.Id, mirrorStrategy, mirror);
+        return mirrored ? mirror : normal;
+    }
+
+    private async Task<AudioFingerprint?> GetAudioPrintAsync(AppDb.MediaFileRow file, CancellationToken ct)
+    {
+        if (await _db.GetAudioPrintAsync(file.Id, AudioPrintExtractor.Strategy) is { } data)
+        {
+            try { return AudioFingerprint.Deserialize(data); }
+            catch (InvalidDataException) { /* recompute below */ }
+        }
+
+        var print = await _audio.ExtractAsync(file.Path, file.DurationSec!.Value, ct);
+        if (print is not null)
+            await _db.UpsertAudioPrintAsync(file.Id, AudioPrintExtractor.Strategy, print.Serialize());
+        return print;
     }
 
     // Cached scene hashes are only valid for the settings that selected their frames.
@@ -353,7 +458,7 @@ public sealed class DupeBuildService
     /// <summary>
     /// Parses <c>--name=value</c> options; unknown or malformed values keep their defaults.
     /// <c>--tol --min --maxdist --frames --clear --refine-frames --scene-threshold
-    /// --max-phash --margin --parallel</c>
+    /// --max-phash --margin --parallel --audio --max-audio-ber --mirror</c>
     /// </summary>
     public static DupeBuildOptions ParseArgs(IEnumerable<string> args)
     {
@@ -383,6 +488,9 @@ public sealed class DupeBuildService
                 "--max-phash" when Double(out var d) => opt with { MaxPHashDist = d },
                 "--margin" when Double(out var d) => opt with { BorderlineMargin = d },
                 "--parallel" when Int(out var i) => opt with { MaxParallelism = i },
+                "--audio" when bool.TryParse(value, out var b) => opt with { UseAudio = b },
+                "--max-audio-ber" when Double(out var d) => opt with { MaxAudioBer = d },
+                "--mirror" when bool.TryParse(value, out var b) => opt with { MatchMirrored = b },
                 _ => opt
             };
         }
