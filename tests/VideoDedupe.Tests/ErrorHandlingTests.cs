@@ -50,7 +50,7 @@ CREATE TABLE MediaFile(Id INTEGER PRIMARY KEY, Path TEXT);");
             executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
                 "WindowsPowerShell", "v1.0", "powershell.exe");
             var script = $"[IO.File]::WriteAllText('{marker.Replace("'", "''")}', [string]$PID); while ($true) {{ Start-Sleep -Milliseconds 100 }}";
-            arguments = ["-NoProfile", "-NonInteractive", "-EncodedCommand", Convert.ToBase64String(Encoding.Unicode.GetBytes(script))];
+            arguments = ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Convert.ToBase64String(Encoding.Unicode.GetBytes(script))];
         }
         else
         {
@@ -67,13 +67,18 @@ CREATE TABLE MediaFile(Id INTEGER PRIMARY KEY, Path TEXT);");
         Process? process = null;
         try
         {
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            // Only a stand-in for ffmpeg has to start here. On a fresh CI runner the first
+            // Windows PowerShell start took over 15 s, so allow a minute; a working machine
+            // writes the marker in well under a second.
+            var deadline = Stopwatch.StartNew();
             int pid;
             // The child may still hold the marker open right after writing it.
             while (!TryReadPid(marker, out pid))
             {
                 if (run.IsCompleted) await run;
-                await Task.Delay(25, deadline.Token);
+                Assert.True(deadline.Elapsed < TimeSpan.FromMinutes(1),
+                    "The child process did not write its PID within a minute.");
+                await Task.Delay(25);
             }
             process = Process.GetProcessById(pid);
             Assert.False(process.HasExited);
