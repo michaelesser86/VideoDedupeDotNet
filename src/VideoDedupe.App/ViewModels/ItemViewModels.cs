@@ -47,7 +47,7 @@ public partial class GroupVm : ObservableObject
         if (Members.Count > 0)
         {
             var decisions = Members.Where(m => m.Decision is not null).ToDictionary(m => m.MediaId, m => m.Decision!);
-            _best = BestFileSelector.Choose(Members.Select(m => m.File).ToList(), decisions, Owner.Priorities);
+            _best = BestFileSelector.Choose(Members.Select(m => m.File).ToList(), decisions, Owner.Priorities, Owner.Rules);
             Members.First(m => m.MediaId == _best.File.Id).IsBest = true;
         }
         for (var i = 0; i < Members.Count; i++)
@@ -78,6 +78,9 @@ public partial class GroupVm : ObservableObject
         BestFileSelector.ReasonKind.Newest => Loc.T("same resolution and size, newest"),
         BestFileSelector.ReasonKind.PreferredFolder => Loc.T("in a preferred folder"),
         BestFileSelector.ReasonKind.OthersInAvoidedFolder => Loc.T("the other copies are in folders to clear first"),
+        BestFileSelector.ReasonKind.PreferredCodec => Loc.F("same resolution, preferred codec ({0})", c.File.VideoCodec),
+        BestFileSelector.ReasonKind.PreferredContainer => Loc.T("same resolution, preferred file format"),
+        BestFileSelector.ReasonKind.SmallestFile => Loc.T("same resolution, smallest file"),
         _ => Loc.T("same quality as the others")
     };
 
@@ -150,12 +153,21 @@ public partial class MemberVm : ObservableObject
     {
         get
         {
+            if (Evidence.Identical && !Evidence.IsReference)
+                return Loc.T("Identical file: same size and content");
             if (Evidence.IsReference)
                 return Loc.T("Reference: the other files were compared with this one");
             var parts = new List<string> { Loc.F("Picture {0:P0} similar", PictureSimilarity) };
             if (Evidence.Mirrored)
                 parts.Add(Loc.T("mirrored"));
-            if (Evidence.TrimKind is { } kind && Evidence.TrimDiffSec is double diff)
+            if (Evidence.TrimKind is AppDb.TrimKinds.Excerpt or AppDb.TrimKinds.ExcerptSource && Evidence.TrimDiffSec is double start)
+            {
+                var at = TimeSpan.FromSeconds(Math.Max(0, start)).ToString(start >= 3600 ? @"h\:mm\:ss" : @"m\:ss", CultureInfo.InvariantCulture);
+                parts.Add(Loc.F(Evidence.TrimKind == AppDb.TrimKinds.Excerpt
+                    ? "excerpt of the longer video, from {0}"
+                    : "contains the excerpt from {0}", at));
+            }
+            else if (Evidence.TrimKind is { } kind && Evidence.TrimDiffSec is double diff)
             {
                 var length = TimeSpan.FromSeconds(Math.Abs(diff)).ToString(@"m\:ss", CultureInfo.InvariantCulture);
                 var atEnd = kind == AppDb.TrimKinds.SameStart;

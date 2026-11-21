@@ -1,0 +1,45 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:VideoDedupe.App.ViewModels"
+        xmlns:l="clr-namespace:VideoDedupe.App.Services"
+        x:Class="VideoDedupe.App.Views.HistoryWindow"
+        x:DataType="vm:HistoryViewModel"
+        Width="900" Height="620" MinWidth="600" MinHeight="360"
+        WindowStartupLocation="CenterOwner"
+        Icon="/Assets/app.ico"
+        Title="{l:T 'History'}">
+  <Grid RowDefinitions="Auto,*,Auto" Margin="20" RowSpacing="12">
+    <StackPanel Spacing="4">
+      <TextBlock Classes="h2" Text="{l:T 'History'}"/>
+      <TextBlock Classes="dim" TextWrapping="Wrap" Text="{Binding Summary}"/>
+    </StackPanel>
+
+    <Border Grid.Row="1" Classes="card" Padding="4">
+      <Panel>
+        <ListBox Background="Transparent" ItemsSource="{Binding Items}"
+                 AutomationProperties.Name="{l:T 'History'}">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:HistoryItemVm">
+              <Grid ColumnDefinitions="120,180,*,80" ColumnSpacing="12">
+                <TextBlock VerticalAlignment="Center" Classes="caption" Text="{Binding When}"/>
+                <TextBlock Grid.Column="1" VerticalAlignment="Center" Text="{Binding ActionText}"/>
+                <StackPanel Grid.Column="2" Spacing="1">
+                  <TextBlock FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                             Text="{Binding FileName}" ToolTip.Tip="{Binding FullPath}"/>
+                  <TextBlock Classes="caption" TextTrimming="PathSegmentEllipsis" Text="{Binding Folder}"/>
+                </StackPanel>
+                <TextBlock Grid.Column="3" VerticalAlignment="Center" HorizontalAlignment="Right"
+                           Classes="caption" Text="{Binding SizeText}"/>
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <TextBlock Margin="16" Classes="dim" TextWrapping="Wrap" IsVisible="{Binding IsEmpty}"
+                   Text="{l:T 'Nothing deleted or moved yet.'}"/>
+      </Panel>
+    </Border>
+
+    <Button Grid.Row="2" HorizontalAlignment="Right" IsCancel="True" IsDefault="True"
+            Content="{l:T 'Close'}" Click="Close_Click"/>
+  </Grid>
+</Window>

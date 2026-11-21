@@ -8,6 +8,7 @@
         Height="900"
         MinWidth="1000"
         MinHeight="640"
+        Icon="/Assets/app.ico"
         Title="VideoDedupe">
 
   <Window.DataContext>
@@ -62,6 +63,10 @@
                  ToolTip.Tip="{Binding State.Status}"/>
 
       <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <Button Classes="update" IsVisible="{Binding HasUpdate}"
+                Content="{Binding UpdateText}"
+                ToolTip.Tip="{l:T 'Opens the download page of the new version.'}"
+                Command="{Binding OpenUpdateCommand}"/>
         <Button Content="{l:T 'Scan library'}"
                 ToolTip.Tip="{l:T 'Read new and changed videos in the enabled folders (step 1).'}"
                 Command="{Binding Library.RunScanIndexCommand}"
@@ -152,6 +157,7 @@
                     <Button.Flyout>
                       <MenuFlyout Placement="BottomEdgeAlignedRight">
                         <MenuItem Header="{l:T 'Export as CSV…'}" Command="{Binding Groups.ExportCsvCommand}"/>
+                        <MenuItem Header="{l:T 'History…'}" Command="{Binding OpenHistoryCommand}"/>
                       </MenuFlyout>
                     </Button.Flyout>
                   </Button>
@@ -273,10 +279,9 @@
               <TextBlock Text="{Binding Quarantine.TabTitle}"/>
             </TabItem.Header>
             <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
-              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <TextBlock VerticalAlignment="Center" Classes="caption" TextWrapping="Wrap"
-                           Text="{Binding Quarantine.Summary}"/>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+              <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Content="{l:T 'History…'}" Command="{Binding OpenHistoryCommand}"/>
                   <Button Content="{l:T 'Open folder'}" Command="{Binding Quarantine.OpenFolderCommand}"/>
                   <Button Content="{l:T 'Delete all…'}"
                           ToolTip.Tip="{l:T 'Move every file in the quarantine folder to the Recycle Bin. Asks first.'}"
@@ -284,7 +289,9 @@
                           IsEnabled="{Binding !State.IsBusy}"
                           IsVisible="{Binding Quarantine.HasItems}"/>
                 </StackPanel>
-              </Grid>
+                <TextBlock Classes="caption" TextWrapping="Wrap" Text="{Binding Quarantine.Summary}"
+                           IsVisible="{Binding Quarantine.HasItems}"/>
+              </StackPanel>
 
               <ListBox Grid.Row="1"
                        Background="Transparent"
@@ -381,6 +388,11 @@
                   </Grid>
                 </StackPanel>
 
+                <StackPanel Spacing="4">
+                  <CheckBox Content="{l:T 'Check for updates at start'}" IsChecked="{Binding CheckForUpdates}"/>
+                  <TextBlock Classes="caption" Margin="28,0,0,0" TextWrapping="Wrap" Text="{Binding VersionText}"/>
+                </StackPanel>
+
                 <StackPanel Spacing="8">
                   <TextBlock Classes="h2" Text="{l:T 'Files'}"/>
                   <TextBlock Text="{l:T 'Database'}"/>
@@ -403,6 +415,29 @@
                             ItemTemplate="{StaticResource ChoiceTemplate}"/>
                 </StackPanel>
 
+                <StackPanel Spacing="8">
+                  <TextBlock Classes="h2" Text="{l:T 'Best copy'}"/>
+                  <TextBlock Classes="caption" TextWrapping="Wrap"
+                             Text="{l:T 'Files marked as keep and folder priorities come first, then the highest resolution. Between copies of the same resolution:'}"/>
+                  <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+                    <TextBlock VerticalAlignment="Center" Text="{l:T 'Codec'}"/>
+                    <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding Groups.CodecOptions}"
+                              SelectedItem="{Binding Groups.PreferredCodec}"
+                              ItemTemplate="{StaticResource ChoiceTemplate}"/>
+                    <TextBlock Grid.Row="1" VerticalAlignment="Center" Text="{l:T 'File format'}"/>
+                    <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding Groups.ContainerOptions}"
+                              SelectedItem="{Binding Groups.PreferredContainer}"
+                              ItemTemplate="{StaticResource ChoiceTemplate}"/>
+                    <TextBlock Grid.Row="2" VerticalAlignment="Center" Text="{l:T 'Then keep the'}"/>
+                    <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding Groups.SizeOptions}"
+                              SelectedItem="{Binding Groups.PreferredSize}"
+                              ItemTemplate="{StaticResource ChoiceTemplate}"/>
+                  </Grid>
+                </StackPanel>
+
                 <StackPanel Spacing="10">
                   <TextBlock Classes="h2" Text="{l:T 'Detection'}"/>
                   <StackPanel Spacing="2">
@@ -419,6 +454,11 @@
                     <CheckBox Content="{l:T 'Find shortened copies'}" IsChecked="{Binding Build.FindTrimmed}"/>
                     <TextBlock Classes="caption" Margin="28,0,0,0" TextWrapping="Wrap"
                                Text="{l:T 'Copies with a cut intro, credits or ads. The first run takes up to ~65 % longer; later runs reuse the results.'}"/>
+                  </StackPanel>
+                  <StackPanel Spacing="2">
+                    <CheckBox Content="{l:T 'Find excerpts'}" IsChecked="{Binding Build.FindExcerpts}"/>
+                    <TextBlock Classes="caption" Margin="28,0,0,0" TextWrapping="Wrap"
+                               Text="{l:T 'Clips of 20 s to 10 min cut out of a longer video. Slow the first time: every video is read completely once (about 3–10 s per 1 GB file); later runs only read new files.'}"/>
                   </StackPanel>
                   <StackPanel Spacing="2">
                     <CheckBox Content="{l:T 'Replace previous results'}" IsChecked="{Binding Build.ClearExisting}"/>
@@ -488,6 +528,10 @@
                 </TextBlock>
               </StackPanel>
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                <Button Content="{l:T 'Compare'}"
+                        ToolTip.Tip="{l:T 'Show the selected file and the best copy side by side, at full resolution (V).'}"
+                        Command="{Binding Groups.CompareCommand}"
+                        CommandParameter="{Binding Groups.CurrentMember}"/>
                 <Button Content="{l:T 'Not duplicates'}"
                         ToolTip.Tip="{l:T 'These files are different videos. Removes the group; later runs will not group them again.'}"
                         Command="{Binding Groups.GroupNotDuplicateCommand}"
@@ -503,7 +547,7 @@
             </Grid>
 
             <TextBlock Grid.Row="1" Classes="caption" TextWrapping="Wrap"
-                       Text="{l:T 'Keys: ↑↓ group · ←→ or 1–9 file · Del delete · Q quarantine · B keep · N not a duplicate · Enter open · Ctrl+Z undo'}"/>
+                       Text="{l:T 'Keys: ↑↓ group · ←→ or 1–9 file · Del delete · Q quarantine · B keep · V compare · N not a duplicate · Enter open · Ctrl+Z undo'}"/>
 
             <ScrollViewer Grid.Row="2">
               <ItemsControl ItemsSource="{Binding Groups.SelectedGroup.Members}" Margin="0,0,12,0">
@@ -518,6 +562,8 @@
                         <ContextMenu>
                           <MenuItem Header="{l:T 'Open'}" InputGesture="Enter"
                                     Command="{Binding Owner.OpenFileCommand}" CommandParameter="{Binding .}"/>
+                          <MenuItem Header="{l:T 'Compare with the best copy'}" InputGesture="V"
+                                    Command="{Binding Owner.CompareCommand}" CommandParameter="{Binding .}"/>
                           <MenuItem Header="{l:T 'Show in Explorer'}" InputGesture="E"
                                     Command="{Binding Owner.ShowInExplorerCommand}" CommandParameter="{Binding .}"/>
                           <MenuItem Header="{l:T 'Copy path'}"
@@ -571,6 +617,8 @@
                             <Button Content="⋯" ToolTip.Tip="{l:T 'More actions'}" AutomationProperties.Name="{l:T 'More actions'}">
                               <Button.Flyout>
                                 <MenuFlyout Placement="BottomEdgeAlignedRight">
+                                  <MenuItem Header="{l:T 'Compare with the best copy'}"
+                                            Command="{Binding Owner.CompareCommand}" CommandParameter="{Binding .}"/>
                                   <MenuItem Header="{l:T 'Show in Explorer'}"
                                             Command="{Binding Owner.ShowInExplorerCommand}" CommandParameter="{Binding .}"/>
                                   <MenuItem Header="{l:T 'Copy path'}"

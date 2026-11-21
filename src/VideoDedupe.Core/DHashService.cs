@@ -46,4 +46,10 @@ public sealed class DHashService
     }
 
     public static int HammingDistance(ulong a, ulong b) => BitOperations.PopCount(a ^ b);
+
+    /// <summary>
+    /// Nearly flat frames (black, fades, plain title cards) hash to almost no set bits (or almost
+    /// all) and look alike in every video, so two of them say nothing about a match.
+    /// </summary>
+    public static bool IsInformative(ulong hash) => BitOperations.PopCount(hash) is >= 8 and <= 56;
 }

@@ -19,7 +19,8 @@ public sealed record DupeBuildOptions(
     bool UseAudio = true,
     double MaxAudioBer = 0.25,
     bool MatchMirrored = true,
-    bool FindTrimmed = false
+    bool FindTrimmed = false,
+    bool FindExcerpts = false
 )
 {
     public static readonly IReadOnlyList<int> DefaultFramePercents = [20, 50, 80];
@@ -63,10 +64,17 @@ public sealed class DupeBuildService
     /// <summary>One file's distance to a group's reference file.</summary>
     internal sealed record Match(AppDb.MediaFileRow File, double Avg, bool Mirrored)
     {
+        /// <summary>
+        /// Most compared positions are flat (black) in both files, so the low distance proves
+        /// little: two unrelated videos with fades at the same places look alike there. When both
+        /// files have a soundtrack, it decides such a match.
+        /// </summary>
+        public bool NeedsConfirmation { get; init; }
         public double? PHashDist { get; set; }
         public double? AudioBer { get; set; }
         public string? TrimKind { get; set; }
         public double? TrimDiffSec { get; set; }
+        public bool Identical { get; set; }
     }
 
     /// <summary>A group found in this run, saved after all phases are done.</summary>
@@ -108,7 +116,7 @@ public sealed class DupeBuildService
         //    at once scales almost linearly. The clustering below is unchanged and only reads
         //    these results, so the groups are the same as with sequential hashing.
         //    Shortened copies have no partner of the same length, so that search needs every file.
-        var needed = opt.FindTrimmed
+        var needed = opt.FindTrimmed || opt.FindExcerpts
             ? files.Where(f => f.DurationSec > 1.0).ToList()
             : buckets.SelectMany(b => FilesInQualifyingWindows(b, opt.TolSec, opt.MinItems)).ToList();
         var hashed = await HashAllAsync(needed, positions, opt, candidateTotal - needed.Count,
@@ -163,7 +171,9 @@ public sealed class DupeBuildService
                 // 5) Distance filter relative to seed
                 var seedHashes = verified[0].Hashes;
                 var preliminary = verified
-                    .Select(v => Compare(seedHashes, v.Hashes, v.File, opt.MatchMirrored))
+                    .Select(v => v.File.Id == seed.Id
+                        ? Compare(seedHashes, v.Hashes, v.File, opt.MatchMirrored) with { NeedsConfirmation = false }
+                        : Compare(seedHashes, v.Hashes, v.File, opt.MatchMirrored))
                     .Where(x => x.Avg <= opt.MaxAvgDist + opt.BorderlineMargin)
                     .OrderBy(x => x.Avg)
                     .ToList();
@@ -172,20 +182,26 @@ public sealed class DupeBuildService
                 // boundary are refined with scene-selected pHashes, and what that does not
                 // confirm with a comparison of the soundtracks.
                 var refinementCandidates = preliminary.Where(x => x.Avg > opt.MaxAvgDist - opt.BorderlineMargin).ToList();
-                if (refinementCandidates.Count > 0)
+                var weak = preliminary.Where(x => x.NeedsConfirmation).ToList();
+                if (refinementCandidates.Count > 0 || opt.UseAudio && weak.Count > 0)
                 {
                     progress?.Report(new DupeBuildProgress("Refining borderline matches", refinementCandidates.Count, 0,
                         seed.Path, candidateTotal, candidateTotal));
-                    await RefineWithScenesAsync(seed, refinementCandidates, sceneHashes, opt, ct);
+                    if (refinementCandidates.Count > 0)
+                        await RefineWithScenesAsync(seed, refinementCandidates, sceneHashes, opt, ct);
 
-                    var unconfirmed = refinementCandidates.Where(c => c.Avg > opt.MaxAvgDist && !ConfirmedByScenes(c, opt)).ToList();
+                    var unconfirmed = refinementCandidates
+                        .Where(c => c.Avg > opt.MaxAvgDist && !ConfirmedByScenes(c, opt))
+                        .Union(weak)
+                        .ToList();
                     if (opt.UseAudio && unconfirmed.Count > 0)
                         await RefineWithAudioAsync(seed, unconfirmed, audioPrints, opt, ct);
                 }
 
                 var accepted = preliminary
-                    .Where(x => x.Avg <= opt.MaxAvgDist || ConfirmedByScenes(x, opt) ||
-                        x.AudioBer <= opt.MaxAudioBer)
+                    .Where(x => x.NeedsConfirmation && x.AudioBer is double ber
+                        ? ber <= opt.MaxAudioBer
+                        : x.Avg <= opt.MaxAvgDist || ConfirmedByScenes(x, opt) || x.AudioBer <= opt.MaxAudioBer)
                     .ToList();
                 var final = ApplyNotDuplicate(seed.Id, accepted, notDuplicates);
 
@@ -203,7 +219,14 @@ public sealed class DupeBuildService
             await AddTrimmedCopiesAsync(files, hashed, positions, groups, notDuplicates, opt,
                 candidateTotal, progress, ct);
 
-        // 6) Save groups + members
+        // 5b) Excerpts (optional): short files found inside much longer ones.
+        if (opt.FindExcerpts)
+            await AddExcerptsAsync(files, hashed, positions, groups, notDuplicates, opt, candidateTotal, progress, ct);
+
+        // 6) Byte-for-byte copies: found without ffmpeg, so also files it cannot read.
+        await AddIdenticalFilesAsync(groups, notDuplicates, opt, candidateTotal, progress, ct);
+
+        // 7) Save groups + members
         foreach (var group in groups)
         {
             ct.ThrowIfCancellationRequested();
@@ -221,7 +244,8 @@ public sealed class DupeBuildService
                     AudioBer = x.AudioBer,
                     IsReference = x.File.Id == group.ReferenceId,
                     TrimKind = x.TrimKind,
-                    TrimDiffSec = x.TrimDiffSec
+                    TrimDiffSec = x.TrimDiffSec,
+                    Identical = x.Identical
                 }),
                 ct: ct);
 
@@ -251,6 +275,177 @@ public sealed class DupeBuildService
         // clamp timestamps inside the video (stability)
         _ => Math.Clamp(durationSec * (key / 100.0), 0.1, Math.Max(0.1, durationSec - 0.1))
     };
+
+    /// <summary>
+    /// Files of equal size are compared by content samples. Identical files join the group of
+    /// one of them, or form a group of their own; they are never used to merge two groups.
+    /// </summary>
+    private async Task AddIdenticalFilesAsync(List<PendingGroup> groups, IReadOnlySet<(long A, long B)> notDuplicates,
+        DupeBuildOptions opt, int candidateTotal, IProgress<DupeBuildProgress>? progress, CancellationToken ct)
+    {
+        var sameSize = await _db.ListFilesWithSharedSizeAsync();
+        if (sameSize.Count == 0) return;
+
+        var done = 0;
+        var fingerprints = await ParallelMapAsync(sameSize, opt.EffectiveParallelism, async f =>
+        {
+            string? print = null;
+            try
+            {
+                print = await ContentSampler.FingerprintAsync(f.Path, f.SizeBytes, ct);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Missing or locked: it simply is not compared.
+            }
+            progress?.Report(new DupeBuildProgress("Finding identical files", sameSize.Count,
+                Interlocked.Increment(ref done), f.Path, candidateTotal, candidateTotal));
+            return print;
+        }, ct);
+
+        var groupOf = new Dictionary<long, PendingGroup>();
+        foreach (var g in groups)
+            foreach (var m in g.Members)
+                groupOf.TryAdd(m.File.Id, g);
+
+        var sets = sameSize
+            .Where(f => fingerprints[f.Id] is not null)
+            .GroupBy(f => (f.SizeBytes, Print: fingerprints[f.Id]!))
+            .Where(s => s.Count() > 1)
+            .Select(s => s.OrderBy(f => f.Path, StringComparer.Ordinal).ToList());
+
+        foreach (var set in sets)
+        {
+            var owners = set.Select(f => groupOf.GetValueOrDefault(f.Id)).OfType<PendingGroup>().Distinct().ToList();
+            if (owners.Count > 1) continue;
+
+            var group = owners.SingleOrDefault();
+            if (group is null)
+            {
+                var members = new List<Match>();
+                foreach (var f in set)
+                    if (members.All(m => !notDuplicates.Contains(PairKey(m.File.Id, f.Id))))
+                        members.Add(new Match(f, 0, false) { Identical = true });
+                if (members.Count < Math.Max(2, opt.MinItems)) continue;
+                group = new PendingGroup(members[0].File.Id, members);
+                groups.Add(group);
+                foreach (var m in members)
+                    groupOf[m.File.Id] = group;
+                continue;
+            }
+
+            foreach (var f in set)
+            {
+                if (group.Members.FirstOrDefault(m => m.File.Id == f.Id) is { } present)
+                {
+                    present.Identical = true;
+                    continue;
+                }
+                if (groupOf.ContainsKey(f.Id) || group.Members.Any(m => notDuplicates.Contains(PairKey(m.File.Id, f.Id))))
+                    continue;
+                group.Members.Add(new Match(f, 0, false) { Identical = true });
+                groupOf[f.Id] = group;
+            }
+        }
+    }
+
+    private async Task AddExcerptsAsync(IReadOnlyList<AppDb.MediaFileRow> files,
+        Dictionary<long, Dictionary<int, FrameHash>?> hashed, IReadOnlyList<int> positions, List<PendingGroup> groups,
+        IReadOnlySet<(long A, long B)> notDuplicates, DupeBuildOptions opt, int candidateTotal,
+        IProgress<DupeBuildProgress>? progress, CancellationToken ct)
+    {
+        // Long files: every keyframe (reads the whole file once). Short ones: 5 frames per second
+        // (a full decode, cheap for a few minutes). Both are cached.
+        var sources = files.Where(f => f.DurationSec >= ExcerptMatcher.MinExcerptSec / TrimMatcher.MinLengthRatio).ToList();
+        var excerpts = files.Where(ExcerptMatcher.CanBeExcerpt).ToList();
+        var keyframes = await SampleAsync(sources, AppDb.FrameSampleKinds.Keyframes, "Reading keyframes for excerpts",
+            (f, token) => _extractor.ExtractKeyframesAsync(f.Path, token));
+        var dense = await SampleAsync(excerpts, AppDb.FrameSampleKinds.Dense, "Sampling short videos for excerpts",
+            (f, token) => _extractor.ExtractDenseFramesAsync(f.Path, ExcerptMatcher.SamplesPerSecond, token));
+
+        progress?.Report(new DupeBuildProgress("Searching excerpts", 1, 0, OverallTotal: candidateTotal, OverallDone: candidateTotal));
+        var candidates = ExcerptMatcher.FindCandidates(
+                sources.Where(f => keyframes.ContainsKey(f.Id)).Select(f => (f, (IReadOnlyList<(long, ulong)>)keyframes[f.Id])).ToList(),
+                excerpts.Where(f => dense.ContainsKey(f.Id)).Select(f => (f, (IReadOnlyList<(long, ulong)>)dense[f.Id])).ToList())
+            .Where(c => !notDuplicates.Contains(PairKey(c.Source.Id, c.Excerpt.Id)))
+            .ToList();
+
+        var checkedCount = 0;
+        var verified = new ConcurrentBag<(ExcerptMatcher.Candidate Candidate, double Avg)>();
+        await Parallel.ForEachAsync(candidates,
+            new ParallelOptions { MaxDegreeOfParallelism = opt.EffectiveParallelism, CancellationToken = ct },
+            async (c, token) =>
+            {
+                if (hashed.GetValueOrDefault(c.Excerpt.Id) is { } excerptHashes
+                    && await VerifyAtOffsetAsync(c.Source, excerptHashes, c.Excerpt.DurationSec!.Value, c.OffsetSec,
+                        mirrored: false, positions, token, skipFlat: true) is double avg
+                    && avg <= opt.MaxAvgDist)
+                    verified.Add((c, avg));
+                progress?.Report(new DupeBuildProgress("Checking excerpts", candidates.Count,
+                    Interlocked.Increment(ref checkedCount), c.Excerpt.Path, candidateTotal, candidateTotal));
+            });
+
+        var groupOf = new Dictionary<long, PendingGroup>();
+        foreach (var g in groups)
+            foreach (var m in g.Members)
+                groupOf.TryAdd(m.File.Id, g);
+
+        foreach (var (c, avg) in verified.OrderBy(v => v.Avg).ThenBy(v => v.Candidate.Source.Id).ThenBy(v => v.Candidate.Excerpt.Id))
+        {
+            var sourceGroup = groupOf.GetValueOrDefault(c.Source.Id);
+            var excerptGroup = groupOf.GetValueOrDefault(c.Excerpt.Id);
+            if (sourceGroup is not null && excerptGroup is not null)
+                continue; // both already grouped; merging could chain unrelated files
+
+            var excerptMatch = new Match(c.Excerpt, avg, false) { TrimKind = AppDb.TrimKinds.Excerpt, TrimDiffSec = c.OffsetSec };
+            if (sourceGroup is null && excerptGroup is null)
+            {
+                if (opt.MinItems > 2) continue;
+                var group = new PendingGroup(c.Source.Id, [new Match(c.Source, 0, false), excerptMatch]);
+                groups.Add(group);
+                groupOf[c.Source.Id] = groupOf[c.Excerpt.Id] = group;
+                continue;
+            }
+
+            var target = (sourceGroup ?? excerptGroup)!;
+            var newcomer = sourceGroup is null
+                ? new Match(c.Source, avg, false) { TrimKind = AppDb.TrimKinds.ExcerptSource, TrimDiffSec = c.OffsetSec }
+                : excerptMatch;
+            if (target.Members.Any(m => notDuplicates.Contains(PairKey(m.File.Id, newcomer.File.Id))))
+                continue;
+            target.Members.Add(newcomer);
+            groupOf[newcomer.File.Id] = target;
+        }
+
+        async Task<Dictionary<long, List<(long TimeMs, ulong Hash)>>> SampleAsync(List<AppDb.MediaFileRow> wanted,
+            string kind, string phase, Func<AppDb.MediaFileRow, CancellationToken, Task<IReadOnlyList<(long TimeMs, GrayFrame Frame)>>> extract)
+        {
+            var cached = await _db.GetFrameSamplesAsync(kind);
+            var missing = wanted.Where(f => !cached.ContainsKey(f.Id) && File.Exists(f.Path)).ToList();
+            var done = 0;
+            var read = await ParallelMapAsync(missing, opt.EffectiveParallelism, async f =>
+            {
+                List<(long, ulong)>? hashes = null;
+                try
+                {
+                    var frames = await extract(f, ct);
+                    hashes = frames.Select(k => (k.TimeMs, _hasher.ComputeHashes(k.Frame).Normal)).ToList();
+                    await _db.SaveFrameSamplesAsync(f.Id, kind, hashes);
+                }
+                catch (Exception ex) when (MediaErrors.IsRecoverable(ex))
+                {
+                    System.Diagnostics.Trace.TraceWarning($"Frame sampling failed: {f.Path}: {ex.Message}");
+                }
+                progress?.Report(new DupeBuildProgress(phase, missing.Count, Interlocked.Increment(ref done), f.Path,
+                    candidateTotal, candidateTotal));
+                return hashes;
+            }, ct);
+            foreach (var (id, hashes) in read)
+                if (hashes is not null)
+                    cached[id] = hashes;
+            return cached;
+        }
+    }
 
     private async Task AddTrimmedCopiesAsync(IReadOnlyList<AppDb.MediaFileRow> files,
         Dictionary<long, Dictionary<int, FrameHash>?> hashed, IReadOnlyList<int> positions, List<PendingGroup> groups,
@@ -330,33 +525,48 @@ public sealed class DupeBuildService
     /// Average distance between the shorter file's frames and the frames of the longer file at
     /// the same moments of the shared footage, or null when too few frames could be compared.
     /// </summary>
-    private async Task<double?> VerifyTrimAsync(TrimMatcher.Candidate c, Dictionary<int, FrameHash> shorterHashes,
+    private Task<double?> VerifyTrimAsync(TrimMatcher.Candidate c, Dictionary<int, FrameHash> shorterHashes,
         IReadOnlyList<int> positions, CancellationToken ct)
     {
         var shorterDur = c.Shorter.DurationSec!.Value;
         var offset = c.Kind == AppDb.TrimKinds.SameStart ? 0 : c.Longer.DurationSec!.Value - shorterDur;
+        return VerifyAtOffsetAsync(c.Longer, shorterHashes, shorterDur, offset, c.Mirrored, positions, ct);
+    }
+
+    /// <summary>
+    /// Average distance between the shorter file's frames and the longer file's frames
+    /// <paramref name="offset"/> seconds later, or null without two comparable frames.
+    /// <paramref name="skipFlat"/> leaves out positions that are black in both: an excerpt can
+    /// sit anywhere, so matching fades are no evidence. Shortened copies keep their measured behaviour.
+    /// </summary>
+    private async Task<double?> VerifyAtOffsetAsync(AppDb.MediaFileRow longer, Dictionary<int, FrameHash> shorterHashes,
+        double shorterDur, double offset, bool mirrored, IReadOnlyList<int> positions, CancellationToken ct,
+        bool skipFlat = false)
+    {
         var times = positions
             .Where(shorterHashes.ContainsKey)
             .Select(p => (Position: p, TimeMs: (long)Math.Round((TimeOf(p, shorterDur) + offset) * 1000)))
             .ToList();
 
-        var cached = await _db.GetTimedFrameHashesAsync(c.Longer.Id);
+        var cached = await _db.GetTimedFrameHashesAsync(longer.Id);
         var missing = times.Where(t => !cached.ContainsKey(t.TimeMs)).Select(t => t.TimeMs).Distinct().ToList();
-        if (missing.Count > 0 && File.Exists(c.Longer.Path))
+        if (missing.Count > 0 && File.Exists(longer.Path))
         {
-            var frames = await _extractor.ExtractGrayFramesAsync(c.Longer.Path, missing.Select(ms => ms / 1000.0).ToList(), ct);
+            var frames = await _extractor.ExtractGrayFramesAsync(longer.Path, missing.Select(ms => ms / 1000.0).ToList(), ct);
             var computed = new Dictionary<long, FrameHash>();
             for (var i = 0; i < missing.Count; i++)
                 if (frames[i] is { } frame)
                     cached[missing[i]] = computed[missing[i]] = _hasher.ComputeHashes(frame);
             if (computed.Count > 0)
-                await _db.UpsertTimedFrameHashesAsync(c.Longer.Id, computed);
+                await _db.UpsertTimedFrameHashesAsync(longer.Id, computed);
         }
 
         var distances = times
             .Where(t => cached.ContainsKey(t.TimeMs))
+            .Where(t => !skipFlat || DHashService.IsInformative(cached[t.TimeMs].Normal)
+                                  || DHashService.IsInformative(shorterHashes[t.Position].Normal))
             .Select(t => (double)DHashService.HammingDistance(cached[t.TimeMs].Normal,
-                c.Mirrored ? shorterHashes[t.Position].Mirrored : shorterHashes[t.Position].Normal))
+                mirrored ? shorterHashes[t.Position].Mirrored : shorterHashes[t.Position].Normal))
             .ToList();
         return distances.Count >= 2 ? distances.Average() : null;
     }
@@ -370,11 +580,14 @@ public sealed class DupeBuildService
     internal static Match Compare(Dictionary<int, FrameHash> reference, Dictionary<int, FrameHash> other,
         AppDb.MediaFileRow file, bool matchMirrored)
     {
+        var weak = MostlyFlat(reference, other);
         var normal = AverageDistance(reference, other, mirrored: false);
         if (!matchMirrored)
-            return new Match(file, normal, false);
+            return new Match(file, normal, false) { NeedsConfirmation = weak };
         var mirrored = AverageDistance(reference, other, mirrored: true);
-        return mirrored < normal ? new Match(file, mirrored, true) : new Match(file, normal, false);
+        return mirrored < normal
+            ? new Match(file, mirrored, true) { NeedsConfirmation = weak }
+            : new Match(file, normal, false) { NeedsConfirmation = weak };
     }
 
     /// <summary>
@@ -548,6 +761,20 @@ public sealed class DupeBuildService
         }
     }
 
+    /// <summary>True when at most half of the shared positions show content in either file.</summary>
+    internal static bool MostlyFlat(Dictionary<int, FrameHash> reference, Dictionary<int, FrameHash> other)
+    {
+        int shared = 0, informative = 0;
+        foreach (var (position, hash) in reference)
+        {
+            if (position < 0 || !other.TryGetValue(position, out var o)) continue;
+            shared++;
+            if (DHashService.IsInformative(hash.Normal) || DHashService.IsInformative(o.Normal))
+                informative++;
+        }
+        return shared > 0 && informative * 2 <= shared;
+    }
+
     private static double AverageDistance(Dictionary<int, FrameHash> reference, Dictionary<int, FrameHash> other,
         bool mirrored)
     {
@@ -625,7 +852,7 @@ public sealed class DupeBuildService
     /// <summary>
     /// Parses <c>--name=value</c> options; unknown or malformed values keep their defaults.
     /// <c>--tol --min --maxdist --frames --clear --refine-frames --scene-threshold
-    /// --max-phash --margin --parallel --audio --max-audio-ber --mirror --trimmed</c>
+    /// --max-phash --margin --parallel --audio --max-audio-ber --mirror --trimmed --excerpts</c>
     /// </summary>
     public static DupeBuildOptions ParseArgs(IEnumerable<string> args)
     {
@@ -659,6 +886,7 @@ public sealed class DupeBuildService
                 "--max-audio-ber" when Double(out var d) => opt with { MaxAudioBer = d },
                 "--mirror" when bool.TryParse(value, out var b) => opt with { MatchMirrored = b },
                 "--trimmed" when bool.TryParse(value, out var b) => opt with { FindTrimmed = b },
+                "--excerpts" when bool.TryParse(value, out var b) => opt with { FindExcerpts = b },
                 _ => opt
             };
         }

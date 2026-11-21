@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS ReviewDecision (
         await db.EnsureColumnAsync("DuplicateMember", "IsReference", "INTEGER NOT NULL DEFAULT 0");
         await db.EnsureColumnAsync("DuplicateMember", "TrimKind", "TEXT NULL");
         await db.EnsureColumnAsync("DuplicateMember", "TrimDiffSec", "REAL NULL");
+        await db.EnsureColumnAsync("DuplicateMember", "Identical", "INTEGER NOT NULL DEFAULT 0");
 
         await db.ExecuteAsync(@"
 CREATE TABLE IF NOT EXISTS AudioPrint (
@@ -133,6 +134,36 @@ CREATE TABLE IF NOT EXISTS NotDuplicatePair (
         // Where a quarantined file went, so it can be restored.
         await db.EnsureColumnAsync("ReviewDecision", "QuarantinePath", "TEXT NULL");
 
+        // Frames of whole files for finding excerpts: every keyframe ('key') of long files and
+        // 5 frames per second ('dense') of short ones. KeyframeScan marks files already read.
+        await db.ExecuteAsync(@"
+CREATE TABLE IF NOT EXISTS KeyframeHash (
+  MediaFileId INTEGER NOT NULL,
+  Kind TEXT NOT NULL,
+  TimeMs INTEGER NOT NULL,
+  Hash64 INTEGER NOT NULL,
+  PRIMARY KEY(MediaFileId, Kind, TimeMs),
+  FOREIGN KEY(MediaFileId) REFERENCES MediaFile(Id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS KeyframeScan (
+  MediaFileId INTEGER NOT NULL,
+  Kind TEXT NOT NULL,
+  ScannedUtc TEXT NOT NULL,
+  PRIMARY KEY(MediaFileId, Kind),
+  FOREIGN KEY(MediaFileId) REFERENCES MediaFile(Id) ON DELETE CASCADE
+);");
+
+        // What the user deleted, quarantined or restored, for the history view.
+        await db.ExecuteAsync(@"
+CREATE TABLE IF NOT EXISTS ActionHistory (
+  Id INTEGER PRIMARY KEY AUTOINCREMENT,
+  Utc TEXT NOT NULL,
+  Action TEXT NOT NULL,              -- see AppDb.HistoryActions
+  Path TEXT NOT NULL,
+  SizeBytes INTEGER NOT NULL,
+  Target TEXT NULL                   -- quarantine path, where there is one
+);");
+
         await db.EnsureColumnAsync("MediaFile", "DurationSec", "REAL");
         await db.EnsureColumnAsync("MediaFile", "Width", "INTEGER");
         await db.EnsureColumnAsync("MediaFile", "Height", "INTEGER");
@@ -151,6 +182,8 @@ INSERT INTO Meta(Key, Value) VALUES ('HashVersion', '') ON CONFLICT(Key) DO NOTH
 DELETE FROM FrameHash WHERE (SELECT Value FROM Meta WHERE Key='HashVersion') IS NOT @Version;
 DELETE FROM VisualHash WHERE (SELECT Value FROM Meta WHERE Key='HashVersion') IS NOT @Version;
 DELETE FROM TimedFrameHash WHERE (SELECT Value FROM Meta WHERE Key='HashVersion') IS NOT @Version;
+DELETE FROM KeyframeHash WHERE (SELECT Value FROM Meta WHERE Key='HashVersion') IS NOT @Version;
+DELETE FROM KeyframeScan WHERE (SELECT Value FROM Meta WHERE Key='HashVersion') IS NOT @Version;
 UPDATE Meta SET Value=@Version WHERE Key='HashVersion';", new { Version = Core.DHashService.Version });
     }
 }

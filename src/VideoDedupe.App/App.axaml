@@ -67,6 +67,10 @@
       <Setter Property="BorderThickness" Value="2"/>
       <Setter Property="Padding" Value="13"/>
     </Style>
+    <Style Selector="Button.update">
+      <Setter Property="Background" Value="{DynamicResource HighlightGradientBrush}"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
     <Style Selector="Border.card.undo">
       <Setter Property="BoxShadow" Value="0 6 24 0 #50000000"/>
       <Setter Property="BorderBrush" Value="{DynamicResource AccentLineBrush}"/>

@@ -92,6 +92,7 @@ public partial class MainWindow : Window
             case Key.B or Key.K: _ = groups.MarkKeepCommand.ExecuteAsync(member); break;
             case Key.N: _ = groups.NotDuplicateCommand.ExecuteAsync(member); break;
             case Key.E: groups.ShowInExplorer(member); break;
+            case Key.V: _ = groups.CompareCommand.ExecuteAsync(member); break;
             default: return;
         }
         e.Handled = true;

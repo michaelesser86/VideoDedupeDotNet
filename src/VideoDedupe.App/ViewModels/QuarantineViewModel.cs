@@ -108,7 +108,7 @@ public partial class QuarantineViewModel : ObservableObject
                 if (item.Exists)
                     DesktopShell.DeleteFile(item.QuarantinePath);
                 var db = await _state.OpenDbAsync();
-                await db.MarkQuarantineDiscardedAsync(item.MediaId);
+                await db.MarkQuarantineDiscardedAsync(item.MediaId, item.QuarantinePath);
             }
             Remove(item);
             _state.Status = Loc.F("Deleted: {0}", item.FileName);
@@ -146,7 +146,7 @@ public partial class QuarantineViewModel : ObservableObject
                 {
                     if (item.Exists)
                         DesktopShell.DeleteFile(item.QuarantinePath);
-                    await db.MarkQuarantineDiscardedAsync(item.MediaId);
+                    await db.MarkQuarantineDiscardedAsync(item.MediaId, item.QuarantinePath);
                     Remove(item);
                     done++;
                 }

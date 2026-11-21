@@ -23,6 +23,7 @@ public sealed class AppSettings
     public bool DupeMatchMirrored { get; set; } = Defaults.MatchMirrored;
     public bool DupeUseAudio { get; set; } = Defaults.UseAudio;
     public bool DupeFindTrimmed { get; set; } = Defaults.FindTrimmed;
+    public bool DupeFindExcerpts { get; set; } = Defaults.FindExcerpts;
     /// <summary>"System", "Light" or "Dark".</summary>
     public string Theme { get; set; } = "System";
     /// <summary>"en" or "de"; empty follows the system language.</summary>
@@ -31,6 +32,11 @@ public sealed class AppSettings
     public string ColorScheme { get; set; } = "violet";
     /// <summary>"quarantine" or "recycle": where clean-up puts the copies.</summary>
     public string CleanupTarget { get; set; } = "quarantine";
+    public bool CheckForUpdates { get; set; } = true;
+    /// <summary>Best-copy rules, see <see cref="BestFileRules"/>.</summary>
+    public string BestCodec { get; set; } = BestFileRules.Any;
+    public string BestContainer { get; set; } = BestFileRules.Any;
+    public bool BestPreferSmaller { get; set; }
 
     /// <summary>Missing or unreadable settings fall back to defaults instead of blocking startup.</summary>
     public static AppSettings Load(string path)

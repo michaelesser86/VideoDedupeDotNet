@@ -35,6 +35,15 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private Choice selectedLanguage;
     [ObservableProperty] private Choice selectedTheme;
     [ObservableProperty] private Choice selectedColorScheme;
+    [ObservableProperty] private bool checkForUpdates;
+
+    /// <summary>A newer release on GitHub, shown in the header; null when up to date.</summary>
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(HasUpdate), nameof(UpdateText))]
+    private UpdateChecker.Release? update;
+
+    public bool HasUpdate => Update is not null;
+    public string UpdateText => Update is null ? "" : Loc.F("Version {0} is available", Update.Version);
+    public string VersionText => Loc.F("Version {0}", UpdateChecker.CurrentVersion);
 
     public MainViewModel()
     {
@@ -53,6 +62,7 @@ public partial class MainViewModel : ObservableObject
         Library = new LibraryViewModel(State);
         Build = new DupeBuildViewModel(State, settings);
         Groups = new GroupsViewModel(State, () => Build.FramePositions, settings.CleanupTarget);
+        Groups.SetRules(settings.BestCodec, settings.BestContainer, settings.BestPreferSmaller);
         Quarantine = new QuarantineViewModel(State);
         Build.Finished += Groups.LoadGroupsAsync;
         State.FlushPendingAsync = Groups.CommitPendingAsync;
@@ -62,8 +72,17 @@ public partial class MainViewModel : ObservableObject
         // Another database: show its folders and groups right away.
         State.DatabaseChanged += () => _ = LoadAllAsync();
 
+        checkForUpdates = settings.CheckForUpdates;
+        Loc.Instance.LanguageChanged += () =>
+        {
+            OnPropertyChanged(nameof(UpdateText));
+            OnPropertyChanged(nameof(VersionText));
+        };
+
         State.Status = Loc.T("Ready.");
         _ = CheckToolsAsync();
+        if (checkForUpdates)
+            _ = CheckForUpdateAsync();
     }
 
     partial void OnSelectedLanguageChanged(Choice value) => Loc.Instance.Language = value.Id;
@@ -106,7 +125,11 @@ public partial class MainViewModel : ObservableObject
             Theme = SelectedTheme.Id,
             Language = SelectedLanguage.Id,
             ColorScheme = SelectedColorScheme.Id,
-            CleanupTarget = Groups.CleanupTarget.Id
+            CleanupTarget = Groups.CleanupTarget.Id,
+            CheckForUpdates = CheckForUpdates,
+            BestCodec = Groups.Rules.Codec,
+            BestContainer = Groups.Rules.Container,
+            BestPreferSmaller = Groups.Rules.PreferSmaller
         };
         Build.SaveTo(settings);
         settings.Save(AppPaths.SettingsFile);
@@ -136,6 +159,55 @@ public partial class MainViewModel : ObservableObject
         {
             if (await DesktopShell.PickFolderAsync(Loc.T("Select quarantine folder")) is { } path)
                 State.QuarantineRoot = path;
+        }
+        catch (Exception ex)
+        {
+            State.Status = Loc.F("Error: {0}", ex.Message);
+        }
+    }
+
+    private async Task CheckForUpdateAsync()
+    {
+        try
+        {
+            Update = await UpdateChecker.FindNewerAsync();
+        }
+        catch (Exception ex)
+        {
+            // Offline or rate-limited: not worth bothering the user.
+            System.Diagnostics.Trace.TraceWarning($"Update check failed: {ex.Message}");
+        }
+    }
+
+    partial void OnCheckForUpdatesChanged(bool value)
+    {
+        if (value && Update is null)
+            _ = CheckForUpdateAsync();
+    }
+
+    [RelayCommand]
+    public async Task OpenHistoryAsync()
+    {
+        try
+        {
+            await State.FlushPendingAsync();
+            var entries = await (await State.OpenDbAsync()).ListHistoryAsync();
+            if (DesktopShell.MainWindow() is { } owner)
+                await new Views.HistoryWindow { DataContext = new HistoryViewModel(entries) }.ShowDialog(owner);
+        }
+        catch (Exception ex)
+        {
+            State.Status = Loc.F("Error: {0}", ex.Message);
+        }
+    }
+
+    [RelayCommand]
+    public void OpenUpdate()
+    {
+        if (Update is null) return;
+        try
+        {
+            DesktopShell.OpenFile(Update.Url);
         }
         catch (Exception ex)
         {

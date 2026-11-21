@@ -26,7 +26,7 @@ if (remaining.Count == 0)
           dupe-build                [--db=<file>] [--tol=0.25] [--min=2] [--maxdist=10] [--frames=20,50,80]
                                     [--clear=true] [--refine-frames=6] [--scene-threshold=0.3]
                                     [--max-phash=16] [--margin=4] [--parallel=0]
-                                    [--mirror=true] [--audio=true] [--max-audio-ber=0.25] [--trimmed=false]
+                                    [--mirror=true] [--audio=true] [--max-audio-ber=0.25] [--trimmed=false] [--excerpts=false]
           dupe-list                 [--db=<file>] [--take=20]
         """);
     return 1;
@@ -127,6 +127,7 @@ try
                 {
                     var notes = new List<string>();
                     if (m.IsReference) notes.Add("reference");
+                    if (m.Identical) notes.Add("identical");
                     if (m.Mirrored) notes.Add("mirrored");
                     if (m.PHashDist is double p) notes.Add($"scenes={p:F1}");
                     if (m.AudioBer is double a) notes.Add($"audio={a:F2}");

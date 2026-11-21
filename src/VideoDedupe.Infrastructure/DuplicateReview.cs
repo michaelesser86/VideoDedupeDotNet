@@ -2,6 +2,46 @@ using System.Globalization;
 
 namespace VideoDedupe.Infrastructure;
 
+/// <summary>
+/// The user's preferences between copies of the same resolution: a codec family, a container,
+/// and whether the larger (more detail) or the smaller file (less space) wins.
+/// </summary>
+public sealed record BestFileRules(string Codec = BestFileRules.Any, string Container = BestFileRules.Any,
+    bool PreferSmaller = false)
+{
+    public const string Any = "any";
+    /// <summary>HEVC, AV1 and VP9: the same picture in less space.</summary>
+    public const string ModernCodec = "modern";
+    /// <summary>H.264: plays everywhere.</summary>
+    public const string H264 = "h264";
+    public const string Mp4 = "mp4";
+    public const string Mkv = "mkv";
+
+    public static BestFileRules Default { get; } = new();
+
+    public int CodecScore(AppDb.MediaFileRow f)
+    {
+        var codec = f.VideoCodec?.ToLowerInvariant() ?? "";
+        return Codec switch
+        {
+            ModernCodec => codec is "hevc" or "h265" or "av1" or "vp9" ? 1 : 0,
+            H264 => codec is "h264" or "avc1" ? 1 : 0,
+            _ => 0
+        };
+    }
+
+    public int ContainerScore(AppDb.MediaFileRow f)
+    {
+        var extension = Path.GetExtension(f.Path).ToLowerInvariant();
+        return Container switch
+        {
+            Mp4 => extension is ".mp4" or ".m4v" or ".mov" ? 1 : 0,
+            Mkv => extension is ".mkv" or ".webm" ? 1 : 0,
+            _ => 0
+        };
+    }
+}
+
 /// <summary>Decides which copy of a duplicate group to keep, and why.</summary>
 public static class BestFileSelector
 {
@@ -14,25 +54,34 @@ public static class BestFileSelector
         /// <summary>The file is in a folder the user prefers to keep.</summary>
         PreferredFolder,
         /// <summary>The other copies are in folders the user wants cleared first.</summary>
-        OthersInAvoidedFolder
+        OthersInAvoidedFolder,
+        /// <summary>Same resolution; the file has the codec the user prefers.</summary>
+        PreferredCodec,
+        /// <summary>Same resolution and codec preference; the file has the preferred container.</summary>
+        PreferredContainer,
+        /// <summary>Same quality; the user keeps the smaller file.</summary>
+        SmallestFile
     }
 
     public sealed record Choice(AppDb.MediaFileRow File, string Reason, ReasonKind Kind);
 
     /// <summary>
     /// Files the user marked as keep win; then files from the highest-priority folder; among
-    /// those the highest resolution, then the largest file (more bitrate at the same
-    /// resolution), then the newest.
+    /// those the highest resolution, then the preferred codec and container (<paramref name="rules"/>),
+    /// then the largest file (more bitrate at the same resolution; or the smallest, if the rules
+    /// say so), then the newest.
     /// </summary>
     public static Choice Choose(IReadOnlyList<AppDb.MediaFileRow> files,
-        IReadOnlyDictionary<long, string>? decisions = null, FolderPriorities? priorities = null)
+        IReadOnlyDictionary<long, string>? decisions = null, FolderPriorities? priorities = null,
+        BestFileRules? rules = null)
     {
+        rules ??= BestFileRules.Default;
         if (files.Count == 0)
             throw new ArgumentException("A group needs at least one file.", nameof(files));
 
         var kept = files.Where(f => decisions?.GetValueOrDefault(f.Id) == KeepDecision).ToList();
         if (kept.Count > 0)
-            return new Choice(Rank(kept)[0], "marked as keep", ReasonKind.MarkedKeep);
+            return new Choice(Rank(kept, rules)[0], "marked as keep", ReasonKind.MarkedKeep);
 
         if (priorities is { HasRules: true })
         {
@@ -40,11 +89,11 @@ public static class BestFileSelector
             var preferred = files.Where(f => priorities.Of(f.Path) == top).ToList();
             if (preferred.Count < files.Count)
                 return top == FolderPriorities.Prefer
-                    ? new Choice(Rank(preferred)[0], "in a preferred folder", ReasonKind.PreferredFolder)
-                    : new Choice(Rank(preferred)[0], "the other copies are in folders to clear first", ReasonKind.OthersInAvoidedFolder);
+                    ? new Choice(Rank(preferred, rules)[0], "in a preferred folder", ReasonKind.PreferredFolder)
+                    : new Choice(Rank(preferred, rules)[0], "the other copies are in folders to clear first", ReasonKind.OthersInAvoidedFolder);
         }
 
-        var ranked = Rank(files);
+        var ranked = Rank(files, rules);
         var best = ranked[0];
         if (ranked.Count == 1)
             return new Choice(best, "only file", ReasonKind.OnlyFile);
@@ -52,16 +101,24 @@ public static class BestFileSelector
         var next = ranked[1];
         if (Pixels(best) > Pixels(next))
             return new Choice(best, $"highest resolution ({best.Width}×{best.Height})", ReasonKind.HighestResolution);
-        if (best.SizeBytes > next.SizeBytes)
+        if (rules.CodecScore(best) > rules.CodecScore(next))
+            return new Choice(best, $"same resolution, preferred codec ({best.VideoCodec})", ReasonKind.PreferredCodec);
+        if (rules.ContainerScore(best) > rules.ContainerScore(next))
+            return new Choice(best, "same resolution, preferred file format", ReasonKind.PreferredContainer);
+        if (rules.PreferSmaller && best.SizeBytes < next.SizeBytes)
+            return new Choice(best, "same resolution, smallest file", ReasonKind.SmallestFile);
+        if (!rules.PreferSmaller && best.SizeBytes > next.SizeBytes)
             return new Choice(best, "same resolution, largest file (most detail)", ReasonKind.LargestFile);
         if (Modified(best) > Modified(next))
             return new Choice(best, "same resolution and size, newest", ReasonKind.Newest);
         return new Choice(best, "same quality as the others", ReasonKind.SameQuality);
     }
 
-    private static List<AppDb.MediaFileRow> Rank(IEnumerable<AppDb.MediaFileRow> files) => files
+    private static List<AppDb.MediaFileRow> Rank(IEnumerable<AppDb.MediaFileRow> files, BestFileRules rules) => files
         .OrderByDescending(Pixels)
-        .ThenByDescending(f => f.SizeBytes)
+        .ThenByDescending(rules.CodecScore)
+        .ThenByDescending(rules.ContainerScore)
+        .ThenByDescending(f => rules.PreferSmaller ? -f.SizeBytes : f.SizeBytes)
         .ThenByDescending(Modified)
         .ThenBy(f => f.Path, StringComparer.Ordinal)
         .ToList();
@@ -96,7 +153,7 @@ public static class CleanupPlanner
     /// copies. Missing files are ignored.
     /// </summary>
     public static Plan Create(IEnumerable<Group> groups, IReadOnlyDictionary<long, string> decisions,
-        Func<string, bool> exists, FolderPriorities? priorities = null)
+        Func<string, bool> exists, FolderPriorities? priorities = null, BestFileRules? rules = null)
     {
         var usable = new List<(Group Group, List<AppDb.MediaFileRow> Present, List<AppDb.MediaFileRow> Keepers)>();
         foreach (var group in groups)
@@ -106,7 +163,7 @@ public static class CleanupPlanner
                 continue;
             var keepers = present.Where(m => decisions.GetValueOrDefault(m.Id) == BestFileSelector.KeepDecision).ToList();
             if (keepers.Count == 0)
-                keepers.Add(BestFileSelector.Choose(present, decisions, priorities).File);
+                keepers.Add(BestFileSelector.Choose(present, decisions, priorities, rules).File);
             usable.Add((group, present, keepers));
         }
 

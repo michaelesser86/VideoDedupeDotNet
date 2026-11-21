@@ -63,6 +63,46 @@ namespace VideoDedupe.Infrastructure
                 new { Id = id, E = enabled ? 1 : 0 });
         }
 
+        public static class HistoryActions
+        {
+            public const string Deleted = "deleted";
+            public const string Quarantined = "quarantined";
+            public const string Restored = "restored";
+            /// <summary>A quarantined file was deleted.</summary>
+            public const string Discarded = "discarded";
+        }
+
+        public sealed class HistoryEntry
+        {
+            public long Id { get; init; }
+            public string Utc { get; init; } = "";
+            public string Action { get; init; } = "";
+            public string Path { get; init; } = "";
+            public long SizeBytes { get; init; }
+            public string? Target { get; init; }
+        }
+
+        public async Task<List<HistoryEntry>> ListHistoryAsync(int take = 5000)
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<HistoryEntry>(
+                "SELECT Id, Utc, Action, Path, SizeBytes, Target FROM ActionHistory ORDER BY Id DESC LIMIT @Take;",
+                new { Take = take });
+            return rows.ToList();
+        }
+
+        /// <summary>The user deleted the file (Recycle Bin); recorded in the history.</summary>
+        public async Task MarkMediaFileDeletedByUserAsync(long mediaFileId)
+        {
+            using var cn = Open();
+            using var tx = cn.BeginTransaction();
+            await cn.ExecuteAsync("UPDATE MediaFile SET IsDeleted=1 WHERE Id=@Id;" + @"
+INSERT INTO ActionHistory(Utc, Action, Path, SizeBytes, Target)
+SELECT @Utc, @Action, Path, SizeBytes, @Target FROM MediaFile WHERE Id=@Id;",
+                new { Id = mediaFileId, Utc = DateTime.UtcNow.ToString("O"), Action = HistoryActions.Deleted, Target = (string?)null }, tx);
+            tx.Commit();
+        }
+
         public async Task MarkMediaFileDeletedAsync(long mediaFileId)
         {
             using var cn = Open();
@@ -121,17 +161,24 @@ ORDER BY d.DecidedUtc DESC, f.Id DESC;");
             using var tx = cn.BeginTransaction();
             await cn.ExecuteAsync(@"
 DELETE FROM ReviewDecision WHERE MediaFileId=@Id AND Decision='quarantine';
-UPDATE MediaFile SET IsDeleted=0 WHERE Id=@Id;", new { Id = mediaFileId }, tx);
+UPDATE MediaFile SET IsDeleted=0 WHERE Id=@Id;
+INSERT INTO ActionHistory(Utc, Action, Path, SizeBytes, Target)
+SELECT @Utc, @Action, Path, SizeBytes, @Target FROM MediaFile WHERE Id=@Id;",
+                new { Id = mediaFileId, Utc = DateTime.UtcNow.ToString("O"), Action = HistoryActions.Restored, Target = (string?)null }, tx);
             tx.Commit();
         }
 
         /// <summary>The quarantined copy was deleted; it leaves the quarantine list.</summary>
-        public async Task MarkQuarantineDiscardedAsync(long mediaFileId)
+        public async Task MarkQuarantineDiscardedAsync(long mediaFileId, string? quarantinePath = null)
         {
             using var cn = Open();
+            using var tx = cn.BeginTransaction();
             await cn.ExecuteAsync(
-                "UPDATE ReviewDecision SET Decision='deleted', DecidedUtc=@Utc WHERE MediaFileId=@Id AND Decision='quarantine';",
-                new { Id = mediaFileId, Utc = DateTime.UtcNow.ToString("O") });
+                "UPDATE ReviewDecision SET Decision='deleted', DecidedUtc=@Utc WHERE MediaFileId=@Id AND Decision='quarantine';" + @"
+INSERT INTO ActionHistory(Utc, Action, Path, SizeBytes, Target)
+SELECT @Utc, @Action, Path, SizeBytes, @Target FROM MediaFile WHERE Id=@Id;",
+                new { Id = mediaFileId, Utc = DateTime.UtcNow.ToString("O"), Action = HistoryActions.Discarded, Target = quarantinePath }, tx);
+            tx.Commit();
         }
 
         public sealed class MediaFileRow
@@ -262,6 +309,16 @@ WHERE MediaFileId IN (
     SELECT Id FROM MediaFile
     WHERE Path = @Path AND (SizeBytes IS NOT @SizeBytes OR ModifiedUtc IS NOT @ModifiedUtc)
 );
+DELETE FROM KeyframeHash
+WHERE MediaFileId IN (
+    SELECT Id FROM MediaFile
+    WHERE Path = @Path AND (SizeBytes IS NOT @SizeBytes OR ModifiedUtc IS NOT @ModifiedUtc)
+);
+DELETE FROM KeyframeScan
+WHERE MediaFileId IN (
+    SELECT Id FROM MediaFile
+    WHERE Path = @Path AND (SizeBytes IS NOT @SizeBytes OR ModifiedUtc IS NOT @ModifiedUtc)
+);
 DELETE FROM AudioPrint
 WHERE MediaFileId IN (
     SELECT Id FROM MediaFile
@@ -298,6 +355,22 @@ WHERE IsDeleted = 0 AND substr(Path, 1, length(@Prefix)) = @Prefix COLLATE NOCAS
             var rows = await cn.QueryAsync<MediaFileRow>(
                 "SELECT Id, Path, SizeBytes, ModifiedUtc, LastScannedUtc FROM MediaFile ORDER BY Id DESC LIMIT @Take",
                 new { Take = take });
+            return rows.ToList();
+        }
+
+        /// <summary>
+        /// Active files that share their size with another active file; only those can be
+        /// byte-for-byte copies. Includes files ffprobe could not read.
+        /// </summary>
+        public async Task<List<MediaFileRow>> ListFilesWithSharedSizeAsync()
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<MediaFileRow>(@"
+SELECT Id, Path, SizeBytes, ModifiedUtc, LastScannedUtc, DurationSec, Width, Height, Fps, VideoCodec, Container
+FROM MediaFile
+WHERE IsDeleted = 0 AND SizeBytes > 0 AND SizeBytes IN (
+  SELECT SizeBytes FROM MediaFile WHERE IsDeleted = 0 AND SizeBytes > 0 GROUP BY SizeBytes HAVING COUNT(*) > 1)
+ORDER BY SizeBytes, Path;");
             return rows.ToList();
         }
 
@@ -410,6 +483,43 @@ ON CONFLICT(MediaFileId, TimeMs) DO UPDATE SET Hash64=excluded.Hash64, MirrorHas
             tx.Commit();
         }
 
+        /// <summary>Kinds of whole-file frame samples.</summary>
+        public static class FrameSampleKinds
+        {
+            public const string Keyframes = "key";
+            public const string Dense = "dense";
+        }
+
+        /// <summary>Frame samples of every file read with this kind (files without any are included, empty).</summary>
+        public async Task<Dictionary<long, List<(long TimeMs, ulong Hash)>>> GetFrameSamplesAsync(string kind)
+        {
+            using var cn = Open();
+            var result = (await cn.QueryAsync<long>("SELECT MediaFileId FROM KeyframeScan WHERE Kind=@Kind;", new { Kind = kind }))
+                .ToDictionary(id => id, _ => new List<(long, ulong)>());
+            foreach (var (id, time, hash) in await cn.QueryAsync<(long, long, long)>(
+                         "SELECT MediaFileId, TimeMs, Hash64 FROM KeyframeHash WHERE Kind=@Kind ORDER BY MediaFileId, TimeMs;",
+                         new { Kind = kind }))
+                if (result.TryGetValue(id, out var list))
+                    list.Add((time, unchecked((ulong)hash)));
+            return result;
+        }
+
+        public async Task SaveFrameSamplesAsync(long mediaFileId, string kind, IReadOnlyList<(long TimeMs, ulong Hash)> hashes)
+        {
+            using var cn = Open();
+            using var tx = cn.BeginTransaction();
+            await cn.ExecuteAsync("DELETE FROM KeyframeHash WHERE MediaFileId=@Id AND Kind=@Kind;",
+                new { Id = mediaFileId, Kind = kind }, tx);
+            foreach (var (time, hash) in hashes)
+                await cn.ExecuteAsync(
+                    "INSERT OR REPLACE INTO KeyframeHash(MediaFileId, Kind, TimeMs, Hash64) VALUES (@Id, @Kind, @Time, @Hash);",
+                    new { Id = mediaFileId, Kind = kind, Time = time, Hash = unchecked((long)hash) }, tx);
+            await cn.ExecuteAsync(
+                "INSERT OR REPLACE INTO KeyframeScan(MediaFileId, Kind, ScannedUtc) VALUES (@Id, @Kind, @Utc);",
+                new { Id = mediaFileId, Kind = kind, Utc = DateTime.UtcNow.ToString("O") }, tx);
+            tx.Commit();
+        }
+
         public async Task<byte[]?> GetAudioPrintAsync(long mediaFileId, string strategy)
         {
             using var cn = Open();
@@ -513,8 +623,8 @@ RETURNING Id;
             {
                 ct.ThrowIfCancellationRequested();
                 await cn.ExecuteAsync(new CommandDefinition(@"
-INSERT INTO DuplicateMember(GroupId, MediaFileId, AvgDist, Mirrored, PHashDist, AudioBer, IsReference, TrimKind, TrimDiffSec)
-VALUES (@GroupId, @MediaFileId, @AvgDist, @Mirrored, @PHashDist, @AudioBer, @IsReference, @TrimKind, @TrimDiffSec);
+INSERT INTO DuplicateMember(GroupId, MediaFileId, AvgDist, Mirrored, PHashDist, AudioBer, IsReference, TrimKind, TrimDiffSec, Identical)
+VALUES (@GroupId, @MediaFileId, @AvgDist, @Mirrored, @PHashDist, @AudioBer, @IsReference, @TrimKind, @TrimDiffSec, @Identical);
 ", new
                 {
                     GroupId = groupId,
@@ -525,7 +635,8 @@ VALUES (@GroupId, @MediaFileId, @AvgDist, @Mirrored, @PHashDist, @AudioBer, @IsR
                     m.AudioBer,
                     IsReference = m.IsReference ? 1 : 0,
                     m.TrimKind,
-                    m.TrimDiffSec
+                    m.TrimDiffSec,
+                    Identical = m.Identical ? 1 : 0
                 }, transaction: tx, cancellationToken: ct));
             }
 
@@ -544,6 +655,7 @@ VALUES (@GroupId, @MediaFileId, @AvgDist, @Mirrored, @PHashDist, @AudioBer, @IsR
             public long IsReference { get; set; }
             public string? TrimKind { get; set; }
             public double? TrimDiffSec { get; set; }
+            public long Identical { get; set; }
             public long Id { get; set; }
             public string Path { get; set; } = "";
             public long SizeBytes { get; set; }
@@ -589,11 +701,13 @@ ON CONFLICT(MediaFileId) DO UPDATE SET
   Note=excluded.Note,
   DecidedUtc=excluded.DecidedUtc,
   QuarantinePath=excluded.QuarantinePath;
-UPDATE MediaFile SET IsDeleted=1 WHERE Id=@Id;",
+UPDATE MediaFile SET IsDeleted=1 WHERE Id=@Id;
+INSERT INTO ActionHistory(Utc, Action, Path, SizeBytes, Target)
+SELECT @Utc, @Action, Path, SizeBytes, @Target FROM MediaFile WHERE Id=@Id;",
                 new
                 {
                     Id = mediaFileId, Note = $"moved to: {quarantinePath}", Target = quarantinePath,
-                    Utc = DateTime.UtcNow.ToString("O")
+                    Utc = DateTime.UtcNow.ToString("O"), Action = HistoryActions.Quarantined
                 }, tx);
             tx.Commit();
         }
@@ -643,6 +757,7 @@ SELECT
   m.IsReference as IsReference,
   m.TrimKind as TrimKind,
   m.TrimDiffSec as TrimDiffSec,
+  m.Identical as Identical,
   f.Id as Id,
   f.Path as Path,
   f.SizeBytes as SizeBytes,
@@ -687,7 +802,8 @@ ORDER BY m.AvgDist ASC;
                     r.AudioBer,
                     r.IsReference != 0,
                     r.TrimKind,
-                    r.TrimDiffSec
+                    r.TrimDiffSec,
+                    r.Identical != 0
                 )).ToList();
 
                 result.Add((g, members));
@@ -724,12 +840,14 @@ ORDER BY m.AvgDist ASC;
             public string? TrimKind { get; set; }
             /// <summary>For a shortened copy: its duration minus the duration of the file it matched.</summary>
             public double? TrimDiffSec { get; set; }
+            /// <summary>Same size and content as another member: a byte-for-byte copy.</summary>
+            public bool Identical { get; set; }
         }
 
         /// <summary>A group member with the evidence that put it there.</summary>
         public sealed record GroupMember(MediaFileRow File, double AvgDist, bool Mirrored = false,
             double? PHashDist = null, double? AudioBer = null, bool IsReference = false,
-            string? TrimKind = null, double? TrimDiffSec = null);
+            string? TrimKind = null, double? TrimDiffSec = null, bool Identical = false);
 
         /// <summary>How a shortened copy lines up with the longer file.</summary>
         public static class TrimKinds
@@ -738,6 +856,10 @@ ORDER BY m.AvgDist ASC;
             public const string SameStart = "same-start";
             /// <summary>Both end alike; one starts later (intro or ads cut).</summary>
             public const string SameEnd = "same-end";
+            /// <summary>A short part of the longer file; TrimDiffSec is where it starts there.</summary>
+            public const string Excerpt = "excerpt";
+            /// <summary>The longer file an excerpt was cut from; TrimDiffSec is where the excerpt starts.</summary>
+            public const string ExcerptSource = "excerpt-source";
         }
     }
 }

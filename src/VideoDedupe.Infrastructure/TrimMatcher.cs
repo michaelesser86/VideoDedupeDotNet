@@ -45,7 +45,7 @@ internal static class TrimMatcher
     public sealed record Candidate(AppDb.MediaFileRow Longer, AppDb.MediaFileRow Shorter, string Kind, bool Mirrored);
 
     /// <summary>Nearly flat frames (black, fades) hash to almost no set bits and match everything.</summary>
-    public static bool IsInformative(ulong hash) => BitOperations.PopCount(hash) is >= 8 and <= 56;
+    public static bool IsInformative(ulong hash) => DHashService.IsInformative(hash);
 
     public static List<Candidate> FindCandidates(
         IReadOnlyList<(AppDb.MediaFileRow File, Dictionary<int, FrameHash> Hashes)> files,

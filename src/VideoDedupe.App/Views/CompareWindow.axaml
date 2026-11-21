@@ -1,0 +1,77 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:VideoDedupe.App.ViewModels"
+        xmlns:l="clr-namespace:VideoDedupe.App.Services"
+        x:Class="VideoDedupe.App.Views.CompareWindow"
+        x:DataType="vm:CompareViewModel"
+        Width="1500" Height="900" MinWidth="800" MinHeight="500"
+        WindowStartupLocation="CenterOwner"
+        Icon="/Assets/app.ico"
+        Title="{l:T 'Compare copies'}">
+
+  <Window.Resources>
+    <DataTemplate x:Key="ChoiceTemplate" x:DataType="vm:Choice">
+      <TextBlock Text="{Binding Label}"/>
+    </DataTemplate>
+  </Window.Resources>
+
+  <Grid RowDefinitions="*,Auto" Margin="16" RowSpacing="12">
+    <Grid ColumnDefinitions="*,12,*">
+      <!-- Left -->
+      <Grid RowDefinitions="Auto,*" RowSpacing="8">
+        <StackPanel Spacing="2">
+          <TextBlock FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                     Text="{Binding Left.Title}" ToolTip.Tip="{Binding Left.Member.Path}"/>
+          <TextBlock Classes="caption">
+            <Run Text="{Binding Left.Details}"/><Run Text=" · "/><Run Text="{Binding Left.TimeText}"/>
+          </TextBlock>
+        </StackPanel>
+        <Border Grid.Row="1" Classes="thumb" Width="NaN" Height="NaN">
+          <ScrollViewer HorizontalScrollBarVisibility="{Binding IsZoomed, Converter={x:Static l:Converters.ScrollWhenTrue}}"
+                        VerticalScrollBarVisibility="{Binding IsZoomed, Converter={x:Static l:Converters.ScrollWhenTrue}}"
+                        Offset="{Binding Offset, Mode=TwoWay}">
+            <Image Source="{Binding Left.Frame}" Stretch="Uniform"
+                   Width="{Binding Left.ImageWidth}" Height="{Binding Left.ImageHeight}"
+                   RenderOptions.BitmapInterpolationMode="None"/>
+          </ScrollViewer>
+        </Border>
+      </Grid>
+
+      <!-- Right -->
+      <Grid Grid.Column="2" RowDefinitions="Auto,*" RowSpacing="8">
+        <StackPanel Spacing="2">
+          <TextBlock FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                     Text="{Binding Right.Title}" ToolTip.Tip="{Binding Right.Member.Path}"/>
+          <TextBlock Classes="caption">
+            <Run Text="{Binding Right.Details}"/><Run Text=" · "/><Run Text="{Binding Right.TimeText}"/>
+          </TextBlock>
+        </StackPanel>
+        <Border Grid.Row="1" Classes="thumb" Width="NaN" Height="NaN">
+          <ScrollViewer HorizontalScrollBarVisibility="{Binding IsZoomed, Converter={x:Static l:Converters.ScrollWhenTrue}}"
+                        VerticalScrollBarVisibility="{Binding IsZoomed, Converter={x:Static l:Converters.ScrollWhenTrue}}"
+                        Offset="{Binding Offset, Mode=TwoWay}">
+            <Image Source="{Binding Right.Frame}" Stretch="Uniform"
+                   Width="{Binding Right.ImageWidth}" Height="{Binding Right.ImageHeight}"
+                   RenderOptions.BitmapInterpolationMode="None"/>
+          </ScrollViewer>
+        </Border>
+      </Grid>
+    </Grid>
+
+    <!-- Controls -->
+    <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="10">
+      <Button Content="◀" ToolTip.Tip="{l:T 'Back 2 % (Left arrow)'}" Command="{Binding StepCommand}" CommandParameter="-2"/>
+      <TextBlock Grid.Column="1" VerticalAlignment="Center" MinWidth="56" Text="{Binding PositionText}"/>
+      <Slider Grid.Column="2" Minimum="0" Maximum="100" Value="{Binding Position}"
+              AutomationProperties.Name="{l:T 'Position'}"/>
+      <Button Grid.Column="3" Content="▶" ToolTip.Tip="{l:T 'Forward 2 % (Right arrow)'}" Command="{Binding StepCommand}" CommandParameter="2"/>
+      <ComboBox Grid.Column="4" Width="120" ToolTip.Tip="{l:T 'Zoom'}"
+                ItemsSource="{Binding ZoomOptions}" SelectedItem="{Binding Zoom}"
+                ItemTemplate="{StaticResource ChoiceTemplate}"/>
+      <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <ProgressBar IsIndeterminate="True" Width="60" IsVisible="{Binding IsLoading}"/>
+        <TextBlock Classes="dim" Text="{Binding Error}" MaxWidth="300" TextTrimming="CharacterEllipsis"/>
+      </StackPanel>
+    </Grid>
+  </Grid>
+</Window>

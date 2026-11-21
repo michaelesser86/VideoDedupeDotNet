@@ -38,6 +38,45 @@ public partial class GroupsViewModel : ObservableObject
     public IReadOnlyList<Choice> CleanupTargetOptions { get; } =
         [new("quarantine", "to the quarantine folder"), new("recycle", "to the Recycle Bin")];
 
+    public IReadOnlyList<Choice> CodecOptions { get; } =
+    [
+        new(BestFileRules.Any, "No preference"),
+        new(BestFileRules.ModernCodec, "HEVC, AV1 or VP9 (smaller files)"),
+        new(BestFileRules.H264, "H.264 (plays everywhere)")
+    ];
+
+    public IReadOnlyList<Choice> ContainerOptions { get; } =
+        [new(BestFileRules.Any, "No preference"), new(BestFileRules.Mp4, "MP4"), new(BestFileRules.Mkv, "MKV")];
+
+    public IReadOnlyList<Choice> SizeOptions { get; } =
+        [new("larger", "Larger file (more detail)"), new("smaller", "Smaller file (less space)")];
+
+    [ObservableProperty] private Choice preferredCodec;
+    [ObservableProperty] private Choice preferredContainer;
+    [ObservableProperty] private Choice preferredSize;
+
+    /// <summary>The user's rules for choosing between copies of the same resolution.</summary>
+    public BestFileRules Rules => new(PreferredCodec.Id, PreferredContainer.Id, PreferredSize.Id == "smaller");
+
+    partial void OnPreferredCodecChanged(Choice value) => RulesChanged();
+    partial void OnPreferredContainerChanged(Choice value) => RulesChanged();
+    partial void OnPreferredSizeChanged(Choice value) => RulesChanged();
+
+    private void RulesChanged()
+    {
+        foreach (var group in Groups)
+            group.UpdateBest();
+        UpdateSummary();
+    }
+
+    /// <summary>Selects the saved rules (unknown ids fall back to the defaults).</summary>
+    public void SetRules(string codec, string container, bool preferSmaller)
+    {
+        PreferredCodec = CodecOptions.FirstOrDefault(o => o.Id == codec) ?? CodecOptions[0];
+        PreferredContainer = ContainerOptions.FirstOrDefault(o => o.Id == container) ?? ContainerOptions[0];
+        PreferredSize = SizeOptions[preferSmaller ? 1 : 0];
+    }
+
     [ObservableProperty] private string filter = "";
     [ObservableProperty] private Choice sort;
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(CleanUpGroupText), nameof(CleanUpGroupTip), nameof(CleanUpAllTip))]
@@ -77,6 +116,9 @@ public partial class GroupsViewModel : ObservableObject
         _state = state;
         _thumbnailPositions = thumbnailPositions;
         sort = SortOptions[0];
+        preferredCodec = CodecOptions[0];
+        preferredContainer = ContainerOptions[0];
+        preferredSize = SizeOptions[0];
         this.cleanupTarget = CleanupTargetOptions.FirstOrDefault(o => o.Id == cleanupTarget) ?? CleanupTargetOptions[0];
         Groups.CollectionChanged += (_, _) => OnPropertyChanged(nameof(TabTitle));
         Loc.Instance.LanguageChanged += () =>
@@ -291,6 +333,30 @@ public partial class GroupsViewModel : ObservableObject
         }
     }
 
+    /// <summary>Opens the file next to the best copy (or, for the best copy, next to the first other one).</summary>
+    [RelayCommand]
+    public async Task CompareAsync(MemberVm? m)
+    {
+        m ??= CurrentMember;
+        if (m is null || m.Group.Members.Count < 2) return;
+        var other = m.IsBest ? m.Group.Members.First(x => x != m) : m.Group.Members.First(x => x.IsBest);
+        var (left, right) = m.IsBest ? (m, other) : (other, m);
+        if (left.IsMissing || right.IsMissing)
+        {
+            _state.Status = Loc.T("File not found.");
+            return;
+        }
+        try
+        {
+            if (DesktopShell.MainWindow() is { } owner)
+                await new Views.CompareWindow { DataContext = new CompareViewModel(left, right) }.ShowDialog(owner);
+        }
+        catch (Exception ex)
+        {
+            _state.Status = Loc.F("Error: {0}", ex.Message);
+        }
+    }
+
     [RelayCommand]
     public void ShowInExplorer(MemberVm? m)
     {
@@ -494,7 +560,7 @@ public partial class GroupsViewModel : ObservableObject
                 if (File.Exists(pending.Path))
                     DesktopShell.DeleteFile(pending.Path);
                 // Otherwise the file would stay "active" in later runs.
-                await pending.Db.MarkMediaFileDeletedAsync(pending.MediaId);
+                await pending.Db.MarkMediaFileDeletedByUserAsync(pending.MediaId);
                 _state.Status = Loc.F("Deleted: {0}", pending.FileName);
             }
         }
@@ -575,7 +641,7 @@ public partial class GroupsViewModel : ObservableObject
             .DistinctBy(m => m.MediaId).ToDictionary(m => m.MediaId, m => m.Decision!);
         var plan = CleanupPlanner.Create(
             groups.Select(g => new CleanupPlanner.Group(g.GroupId, g.Members.Select(m => m.File).ToList())),
-            decisions, File.Exists, Priorities);
+            decisions, File.Exists, Priorities, Rules);
         if (plan.Items.Count == 0)
         {
             _state.Status = Loc.T("Nothing to clean up.");
@@ -625,7 +691,7 @@ public partial class GroupsViewModel : ObservableObject
                     if (recycle)
                     {
                         DesktopShell.DeleteFile(item.File.Path);
-                        await db.MarkMediaFileDeletedAsync(item.File.Id);
+                        await db.MarkMediaFileDeletedByUserAsync(item.File.Id);
                     }
                     else
                     {

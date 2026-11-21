@@ -94,6 +94,51 @@ public sealed class FfmpegFrameExtractor
 
     /// <param name="width">Scale the frame to this width inside ffmpeg (aspect kept). Encoding and
     /// decoding a full 4K PNG costs far more than a thumbnail needs.</param>
+    /// <summary>Size of the keyframe images: small, and fixed so the raw stream splits into frames.</summary>
+    public const int KeyframeWidth = 128, KeyframeHeight = 72;
+
+    /// <summary>
+    /// Every keyframe of the file with its time, decoded at low resolution. Only keyframes are
+    /// decoded, which is several times faster than the full video, but the whole file is read.
+    /// </summary>
+    public async Task<IReadOnlyList<(long TimeMs, GrayFrame Frame)>> ExtractKeyframesAsync(string filePath, CancellationToken ct)
+    {
+        string[] args =
+        [
+            "-hide_banner", "-loglevel", "info", "-skip_frame", "nokey", "-i", filePath,
+            "-an", "-sn", "-dn", "-fps_mode", "passthrough",
+            "-vf", $"scale={KeyframeWidth}:{KeyframeHeight}:flags=area,format=gray,showinfo",
+            "-f", "rawvideo", "-pix_fmt", "gray", "-"
+        ];
+        var (raw, log) = await _tools.RunToBytesWithLogAsync(_tools.FfmpegPath, args, ct);
+        return SplitKeyframes(raw, log);
+    }
+
+    /// <summary><paramref name="perSecond"/> frames per second of the whole file (a full decode, so short files only).</summary>
+    public async Task<IReadOnlyList<(long TimeMs, GrayFrame Frame)>> ExtractDenseFramesAsync(string filePath, int perSecond,
+        CancellationToken ct)
+    {
+        string[] args =
+        [
+            "-hide_banner", "-loglevel", "info", "-i", filePath, "-an", "-sn", "-dn",
+            "-vf", $"fps={perSecond},scale={KeyframeWidth}:{KeyframeHeight}:flags=area,format=gray,showinfo",
+            "-f", "rawvideo", "-pix_fmt", "gray", "-"
+        ];
+        var (raw, log) = await _tools.RunToBytesWithLogAsync(_tools.FfmpegPath, args, ct);
+        return SplitKeyframes(raw, log);
+    }
+
+    internal static IReadOnlyList<(long TimeMs, GrayFrame Frame)> SplitKeyframes(byte[] raw, string log)
+    {
+        const int size = KeyframeWidth * KeyframeHeight;
+        var times = SceneFrameSelector.ParsePtsTimes(log);
+        var count = Math.Min(raw.Length / size, times.Count);
+        var frames = new List<(long, GrayFrame)>(count);
+        for (var i = 0; i < count; i++)
+            frames.Add(((long)Math.Round(times[i] * 1000), new GrayFrame(KeyframeWidth, KeyframeHeight, raw.AsSpan(i * size, size).ToArray())));
+        return frames;
+    }
+
     public Task<byte[]> ExtractFramePngAsync(string filePath, double timestampSec, CancellationToken ct,
         int? width = null) =>
         ExtractAsync(filePath, timestampSec, ct, width, ["-vcodec", "png"]);

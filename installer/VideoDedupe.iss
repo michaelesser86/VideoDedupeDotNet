@@ -19,6 +19,7 @@ DisableDirPage=auto
 LicenseFile=..\LICENSE.txt
 OutputDir=..\artifacts
 OutputBaseFilename=VideoDedupe-{#AppVersion}-setup
+SetupIconFile=..\src\VideoDedupe.App\Assets\app.ico
 UninstallDisplayIcon={app}\VideoDedupe.App.exe
 UninstallDisplayName=VideoDedupe
 ArchitecturesAllowed=x64compatible

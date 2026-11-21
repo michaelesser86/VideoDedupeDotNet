@@ -32,6 +32,7 @@ public partial class DupeBuildViewModel : ObservableObject
     [ObservableProperty] private bool matchMirrored = true;
     [ObservableProperty] private bool useAudio = true;
     [ObservableProperty] private bool findTrimmed;
+    [ObservableProperty] private bool findExcerpts;
 
     [ObservableProperty] private bool isBuilding;
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(ProgressText))] private string phase = "";
@@ -59,6 +60,7 @@ public partial class DupeBuildViewModel : ObservableObject
         MatchMirrored = settings.DupeMatchMirrored;
         UseAudio = settings.DupeUseAudio;
         FindTrimmed = settings.DupeFindTrimmed;
+        FindExcerpts = settings.DupeFindExcerpts;
         state.DatabaseChanged += () => _cts?.Cancel();
         Loc.Instance.LanguageChanged += () => OnPropertyChanged(nameof(ProgressText));
     }
@@ -73,6 +75,7 @@ public partial class DupeBuildViewModel : ObservableObject
         settings.DupeMatchMirrored = MatchMirrored;
         settings.DupeUseAudio = UseAudio;
         settings.DupeFindTrimmed = FindTrimmed;
+        settings.DupeFindExcerpts = FindExcerpts;
     }
 
     /// <summary>The detection positions, also used for the thumbnails.</summary>
@@ -102,6 +105,7 @@ public partial class DupeBuildViewModel : ObservableObject
         MatchMirrored = defaults.MatchMirrored;
         UseAudio = defaults.UseAudio;
         FindTrimmed = defaults.FindTrimmed;
+        FindExcerpts = defaults.FindExcerpts;
     }
 
     [RelayCommand]
@@ -134,7 +138,8 @@ public partial class DupeBuildViewModel : ObservableObject
                 FramePercents: FramePositions,
                 MatchMirrored: MatchMirrored,
                 UseAudio: UseAudio,
-                FindTrimmed: FindTrimmed);
+                FindTrimmed: FindTrimmed,
+                FindExcerpts: FindExcerpts);
             _state.Status = Loc.T("Finding duplicates...");
 
             var progress = new Progress<DupeBuildProgress>(p =>

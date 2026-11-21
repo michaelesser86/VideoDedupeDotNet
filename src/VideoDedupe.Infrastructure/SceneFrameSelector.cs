@@ -36,6 +36,13 @@ public sealed class SceneFrameSelector
         return SelectRepresentative(timestamps, durationSec, count);
     }
 
+    /// <summary>Every pts_time of a showinfo log, in output order.</summary>
+    public static List<double> ParsePtsTimes(string output) =>
+        PtsTime.Matches(output)
+            .Select(match => double.TryParse(match.Groups["time"].Value, NumberStyles.Float,
+                CultureInfo.InvariantCulture, out var value) ? value : double.NaN)
+            .ToList();
+
     public static IReadOnlyList<double> ParseTimestamps(string output, double durationSec) =>
         PtsTime.Matches(output)
             .Select(match => double.TryParse(match.Groups["time"].Value, NumberStyles.Float,

@@ -58,7 +58,12 @@ public sealed class FfmpegTools
         return missing;
     }
 
-    public async Task<byte[]> RunToBytesAsync(string exe, IReadOnlyList<string> arguments, CancellationToken ct)
+    public async Task<byte[]> RunToBytesAsync(string exe, IReadOnlyList<string> arguments, CancellationToken ct) =>
+        (await RunToBytesWithLogAsync(exe, arguments, ct)).Output;
+
+    /// <summary>Standard output as bytes plus the error stream, for filters that log there (showinfo).</summary>
+    public async Task<(byte[] Output, string Log)> RunToBytesWithLogAsync(string exe, IReadOnlyList<string> arguments,
+        CancellationToken ct)
     {
         using var p = Start(exe, arguments, ct);
 
@@ -84,7 +89,7 @@ public sealed class FfmpegTools
         if (ms.Length == 0)
             throw new ExternalToolException($"{exe} produced no output. args: {string.Join(' ', arguments)} stderr: {stderr}");
 
-        return ms.ToArray();
+        return (ms.ToArray(), stderr);
     }
 
     // ArgumentList quotes every argument itself, so paths with spaces, quotes or a
