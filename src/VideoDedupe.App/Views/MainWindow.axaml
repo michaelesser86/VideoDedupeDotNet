@@ -246,7 +246,7 @@
 
                 <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="10">
                   <TextBox Grid.Column="0"
-                           Watermark="Paste folder path (e.g. D:\Videos)"
+                           PlaceholderText="Paste folder path (e.g. D:\Videos)"
                            Text="{Binding NewRootPath}"/>
                   <Button Grid.Column="1"
                           Content="Add Path"
@@ -319,7 +319,7 @@
                       ColumnDefinitions="*,Auto"
                       ColumnSpacing="10">
                   <TextBox Grid.Column="0"
-                           Watermark="Filter groups by path contains…"
+                           PlaceholderText="Filter groups by path contains…"
                            Text="{Binding GroupFilter}"/>
                   <ComboBox Grid.Column="1"
                             Width="170"
@@ -386,7 +386,7 @@
                       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
                         <TextBlock VerticalAlignment="Center" Text="Frames (%)"/>
                         <TextBox Grid.Column="1"
-                                 Watermark="20,50,80"
+                                 PlaceholderText="20,50,80"
                                  Text="{Binding DupeFramesCsv}"/>
                       </Grid>
 
