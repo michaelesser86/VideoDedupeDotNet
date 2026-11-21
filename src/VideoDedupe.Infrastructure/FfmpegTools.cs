@@ -13,23 +13,10 @@ public sealed class FfmpegTools
         FfmpegPath = ffmpegPath ?? "ffmpeg";
     }
 
-    public async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string exe, string arguments, CancellationToken ct)
+    public async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string exe,
+        IReadOnlyList<string> arguments, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-        if (!File.Exists(exe) && exe.IndexOf(Path.DirectorySeparatorChar) >= 0)
-            throw new FileNotFoundException($"ffprobe not found at path: {exe}");
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = exe,
-            Arguments = arguments,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        using var p = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start: {exe}");
+        using var p = Start(exe, arguments, ct);
         var stdoutTask = p.StandardOutput.ReadToEndAsync(ct);
         var stderrTask = p.StandardError.ReadToEndAsync(ct);
         try
@@ -44,21 +31,9 @@ public sealed class FfmpegTools
         return (p.ExitCode, await stdoutTask, await stderrTask);
     }
 
-    public async Task<byte[]> RunToBytesAsync(string exe, string arguments, CancellationToken ct)
+    public async Task<byte[]> RunToBytesAsync(string exe, IReadOnlyList<string> arguments, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-        var psi = new ProcessStartInfo
-        {
-            FileName = exe,
-            Arguments = arguments,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        using var p = Process.Start(psi)
-            ?? throw new InvalidOperationException($"Failed to start: {exe}");
+        using var p = Start(exe, arguments, ct);
 
         // Read stderr in parallel (important for diagnostics)
         var stderrTask = p.StandardError.ReadToEndAsync(ct);
@@ -80,9 +55,31 @@ public sealed class FfmpegTools
             throw new ExternalToolException($"{exe} failed ({p.ExitCode}). stderr: {stderr}");
 
         if (ms.Length == 0)
-            throw new ExternalToolException($"{exe} produced no output. args: {arguments} stderr: {stderr}");
+            throw new ExternalToolException($"{exe} produced no output. args: {string.Join(' ', arguments)} stderr: {stderr}");
 
         return ms.ToArray();
+    }
+
+    // ArgumentList quotes every argument itself, so paths with spaces, quotes or a
+    // leading dash cannot change the meaning of the command line.
+    private static Process Start(string exe, IReadOnlyList<string> arguments, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!File.Exists(exe) && (exe.Contains(Path.DirectorySeparatorChar) || exe.Contains(Path.AltDirectorySeparatorChar)))
+            throw new FileNotFoundException($"{Path.GetFileName(exe)} not found at path: {exe}", exe);
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = exe,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var argument in arguments)
+            psi.ArgumentList.Add(argument);
+
+        return Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start: {exe}");
     }
 
     private static async Task TerminateAsync(Process process)

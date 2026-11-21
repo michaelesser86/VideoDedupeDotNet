@@ -31,6 +31,12 @@ namespace VideoDedupe.Infrastructure
             await cn.ExecuteAsync(sql, args);
         }
 
+        public async Task<string?> GetMetaAsync(string key)
+        {
+            using var cn = Open();
+            return await cn.ExecuteScalarAsync<string?>("SELECT Value FROM Meta WHERE Key=@Key", new { Key = key });
+        }
+
         internal async Task EnsureColumnAsync(string table, string column, string type)
         {
             using var cn = Open();
@@ -241,6 +247,8 @@ WHERE IsDeleted = 0 AND substr(Path, 1, length(@Prefix)) = @Prefix COLLATE NOCAS
                 DurationSec, Width, Height, Fps, VideoCodec, Container
                 FROM MediaFile
                 WHERE DurationSec IS NOT NULL AND IsDeleted = 0
+                -- Deterministic seeds: ids depend on the (parallel) indexing order.
+                ORDER BY DurationSec, Path
 ");
             return rows.ToList();
         }
@@ -253,6 +261,20 @@ WHERE IsDeleted = 0 AND substr(Path, 1, length(@Prefix)) = @Prefix COLLATE NOCAS
                 VALUES (@MediaFileId, @PositionPct, @Hash64)
                 ON CONFLICT(MediaFileId, PositionPct) DO UPDATE SET Hash64=excluded.Hash64;
                 ", new { MediaFileId = mediaFileId, PositionPct = positionPct, Hash64 = unchecked((long)hash64) });
+        }
+
+        /// <summary>Stores several positions of one file in a single transaction.</summary>
+        public async Task UpsertFrameHashesAsync(long mediaFileId, IReadOnlyDictionary<int, ulong> hashes)
+        {
+            using var cn = Open();
+            using var tx = cn.BeginTransaction();
+            await cn.ExecuteAsync(@"
+                INSERT INTO FrameHash(MediaFileId, PositionPct, Hash64)
+                VALUES (@MediaFileId, @PositionPct, @Hash64)
+                ON CONFLICT(MediaFileId, PositionPct) DO UPDATE SET Hash64=excluded.Hash64;",
+                hashes.Select(h => new { MediaFileId = mediaFileId, PositionPct = h.Key, Hash64 = unchecked((long)h.Value) }),
+                tx);
+            tx.Commit();
         }
 
         public async Task<ulong?> GetFrameHashAsync(long mediaFileId, int positionPct)

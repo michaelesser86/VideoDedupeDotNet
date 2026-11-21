@@ -43,20 +43,21 @@ CREATE TABLE MediaFile(Id INTEGER PRIMARY KEY, Path TEXT);");
     {
         using var workspace = new TestWorkspace();
         var marker = Path.Combine(workspace.Root, "pid.txt");
-        string executable, arguments;
+        string executable;
+        string[] arguments;
         if (OperatingSystem.IsWindows())
         {
             executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
                 "WindowsPowerShell", "v1.0", "powershell.exe");
             var script = $"[IO.File]::WriteAllText('{marker.Replace("'", "''")}', [string]$PID); while ($true) {{ Start-Sleep -Milliseconds 100 }}";
-            arguments = "-NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+            arguments = ["-NoProfile", "-NonInteractive", "-EncodedCommand", Convert.ToBase64String(Encoding.Unicode.GetBytes(script))];
         }
         else
         {
             executable = "/bin/sh";
             var script = Path.Combine(workspace.Root, "wait.sh");
             await File.WriteAllTextAsync(script, $"echo $$ > '{marker.Replace("'", "'\\''")}'\nwhile :; do sleep 1; done\n");
-            arguments = $"\"{script}\"";
+            arguments = [script];
         }
 
         using var cts = new CancellationTokenSource();

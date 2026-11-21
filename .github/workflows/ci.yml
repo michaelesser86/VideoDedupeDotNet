@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    # The app targets Windows (Recycle Bin, Explorer); tests run where it is developed.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore (fails on known vulnerable packages)
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      # Without ffmpeg on the runner the real-video extraction test passes vacuously;
+      # everything else uses cached hashes or a deliberately missing executable.
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal

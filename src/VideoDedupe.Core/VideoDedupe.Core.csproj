@@ -1,17 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-
+  <!-- Intentionally dependency-free: frames arrive as raw PGM from ffmpeg. -->
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="11.3.12" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.12" />
-    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.12" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.12" />
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <InternalsVisibleTo Include="VideoDedupe.Tests" />
   </ItemGroup>
 
 </Project>

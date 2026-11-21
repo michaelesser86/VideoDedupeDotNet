@@ -1,0 +1,8 @@
+# Store and check out text as LF, matching .editorconfig, independent of core.autocrlf.
+* text=auto eol=lf
+
+# Visual Studio expects CRLF in solution files.
+*.sln text eol=crlf
+
+*.png binary
+*.ico binary

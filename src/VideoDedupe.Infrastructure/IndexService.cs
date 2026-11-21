@@ -12,6 +12,13 @@ public sealed record IndexProgress(
 
 public sealed class IndexService
 {
+    /// <summary>Containers ffmpeg reads that commonly hold videos.</summary>
+    public static readonly IReadOnlySet<string> VideoExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp4", ".m4v", ".mkv", ".webm", ".avi", ".mov", ".wmv", ".flv",
+        ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".3gp", ".ogv"
+    };
+
     private readonly AppDb _db;
     private readonly FfprobeService _probe;
 
@@ -43,12 +50,20 @@ public sealed class IndexService
             if (!Directory.Exists(r.Path))
                 continue;
 
-            var opt = r.IncludeSubdirs == 1 ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            // One unreadable folder (system folders, other users' profiles, a vanished
+            // network share) must not abort the whole scan.
+            var opt = new EnumerationOptions
+            {
+                RecurseSubdirectories = r.IncludeSubdirs == 1,
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.System,
+                MatchCasing = MatchCasing.CaseInsensitive
+            };
 
-            foreach (var f in Directory.EnumerateFiles(r.Path, "*.mp4", opt))
+            foreach (var f in Directory.EnumerateFiles(r.Path, "*", opt))
             {
                 ct.ThrowIfCancellationRequested();
-                if (IsExcluded(f, r.ExcludeText))
+                if (!VideoExtensions.Contains(Path.GetExtension(f)) || IsExcluded(f, r.ExcludeText))
                     continue;
 
                 files.Add((r.Path, f, r.ExcludeText));
@@ -66,8 +81,8 @@ public sealed class IndexService
         int processed = 0, ok = 0, fail = 0, unchanged = 0;
         var known = await _db.ListIndexedFileStatesAsync();
 
-        // adjust if you want: 2–4 is a good start
-        var parallel = Math.Max(1, Math.Min(Environment.ProcessorCount / 2, 4));
+        // ffprobe only reads container headers; a few at once hide the process start latency.
+        var parallel = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
         using var sem = new SemaphoreSlim(parallel);
 
         var tasks = files.Select(async item =>

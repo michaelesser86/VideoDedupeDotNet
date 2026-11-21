@@ -1,45 +1,47 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
-
 namespace VideoDedupe.Core;
 
-/// <summary>A small, dependency-free perceptual hash used to refine dHash matches.</summary>
+/// <summary>A small, dependency-free perceptual hash (8×8 low frequencies of a 32×32 DCT).</summary>
 public sealed class PHashService
 {
-    public ulong ComputePHash64(byte[] pngBytes)
+    private const int Size = 32;
+    private const int Low = 8;
+
+    // Cos[u, x] of the DCT-II; separable, so the 2-D transform is two 1-D passes.
+    private static readonly double[,] Cos = CreateCosTable();
+
+    public ulong ComputePHash64(GrayFrame frame)
     {
-        if (pngBytes is null || pngBytes.Length == 0)
-            throw new ArgumentException("pngBytes is null/empty", nameof(pngBytes));
+        ArgumentNullException.ThrowIfNull(frame);
+        var pixels = frame.Downscale(frame.ContentBounds(), Size, Size);
 
-        using var image = Image.Load<Rgba32>(pngBytes);
-        DHashService.CropBlackBars(image);
-        image.Mutate(x => x.Resize(32, 32).Grayscale());
-
-        var pixels = new double[32, 32];
-        for (var y = 0; y < 32; y++)
-            for (var x = 0; x < 32; x++)
-                pixels[x, y] = image[x, y].R;
-
-        var low = new double[8, 8];
-        for (var v = 0; v < 8; v++)
-            for (var u = 0; u < 8; u++)
+        // rows[u, y] = Σx pixels[x, y] · cos(u, x)
+        var rows = new double[Low, Size];
+        for (var u = 0; u < Low; u++)
+            for (var y = 0; y < Size; y++)
             {
                 double sum = 0;
-                for (var y = 0; y < 32; y++)
-                    for (var x = 0; x < 32; x++)
-                        sum += pixels[x, y] * Math.Cos((2 * x + 1) * u * Math.PI / 64)
-                            * Math.Cos((2 * y + 1) * v * Math.PI / 64);
-                low[u, v] = sum;
+                for (var x = 0; x < Size; x++)
+                    sum += pixels[y * Size + x] * Cos[u, x];
+                rows[u, y] = sum;
             }
 
-        var median = low.Cast<double>().Skip(1).Order().ElementAt(31);
+        // low[u, v] = Σy rows[u, y] · cos(v, y)
+        var low = new double[Low * Low];
+        for (var v = 0; v < Low; v++)
+            for (var u = 0; u < Low; u++)
+            {
+                double sum = 0;
+                for (var y = 0; y < Size; y++)
+                    sum += rows[u, y] * Cos[v, y];
+                low[v * Low + u] = sum;
+            }
+
+        // Median of the 63 AC coefficients; the DC term only carries overall brightness.
+        var median = low.Skip(1).Order().ElementAt(31);
         ulong hash = 0;
-        var bit = 0;
-        for (var v = 0; v < 8; v++)
-            for (var u = 0; u < 8; u++, bit++)
-                if (low[u, v] > median)
-                    hash |= 1UL << bit;
+        for (var bit = 0; bit < Low * Low; bit++)
+            if (low[bit] > median)
+                hash |= 1UL << bit;
         return hash;
     }
 
@@ -53,5 +55,14 @@ public sealed class PHashService
         if (seed.Count == 0 || candidate.Count == 0)
             return null;
         return seed.Average(a => candidate.Min(b => DHashService.HammingDistance(a, b)));
+    }
+
+    private static double[,] CreateCosTable()
+    {
+        var table = new double[Low, Size];
+        for (var u = 0; u < Low; u++)
+            for (var x = 0; x < Size; x++)
+                table[u, x] = Math.Cos((2 * x + 1) * u * Math.PI / (2 * Size));
+        return table;
     }
 }

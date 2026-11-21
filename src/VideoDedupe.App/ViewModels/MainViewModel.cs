@@ -18,13 +18,16 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
+using VideoDedupe.App.Services;
+using VideoDedupe.App.Views;
 using VideoDedupe.Infrastructure;
 
 namespace VideoDedupe.App.ViewModels;
 
 public partial class MainViewModel : ObservableObject
 {
-    [ObservableProperty] private string dbPath = Path.Combine(AppContext.BaseDirectory, "videodedupe.db"); [ObservableProperty] private bool isBusy;
+    [ObservableProperty] private string dbPath = AppPaths.DefaultDatabase;
+    [ObservableProperty] private bool isBusy;
     [ObservableProperty] private string status = "";
     [ObservableProperty] private string groupFilter = "";
     [ObservableProperty] private string groupSort = "Largest files";
@@ -36,7 +39,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private RootVm? selectedRoot;
     [ObservableProperty] private GroupVm? selectedGroup;
 
-    [ObservableProperty] private string quarantineRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "VideoDedupe_Quarantine");
+    [ObservableProperty] private string quarantineRoot = AppPaths.DefaultQuarantine;
 
     [ObservableProperty] private string newRootPath = "";
     private CancellationTokenSource? _thumbCts;
@@ -61,12 +64,13 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string dupeCurrent = "";
     [ObservableProperty] private string dupeEta = "Estimating remaining time...";
     private readonly Stopwatch _dupeStopwatch = new();
-    // Dupe-build settings (UI)
-    [ObservableProperty] private bool dupeClearExisting = true;
-    [ObservableProperty] private double dupeTolSec = 0.5;
+    // Dupe-build settings (UI). Initial values come from AppSettings, whose defaults are
+    // those of DupeBuildOptions, so UI, CLI and service agree.
+    [ObservableProperty] private bool dupeClearExisting;
+    [ObservableProperty] private double dupeTolSec;
     [ObservableProperty] private int dupeMinItems = 2;
-    [ObservableProperty] private double dupeMaxAvgDist = 12.0;
-    [ObservableProperty] private string dupeFramesCsv = "20,50,80";
+    [ObservableProperty] private double dupeMaxAvgDist;
+    [ObservableProperty] private string dupeFramesCsv = "";
 
     public double DupePercent => DupeTotal <= 0 ? 0 : (double)DupeDone / DupeTotal;
 
@@ -122,7 +126,52 @@ public partial class MainViewModel : ObservableObject
     public MainViewModel()
     {
         _extractor = new FfmpegFrameExtractor(_tools);
+
+        var settings = AppSettings.Load(AppPaths.SettingsFile);
+        DbPath = settings.DbPath;
+        QuarantineRoot = settings.QuarantineRoot;
+        DupeClearExisting = settings.DupeClearExisting;
+        DupeTolSec = settings.DupeTolSec;
+        DupeMinItems = Math.Max(2, settings.DupeMinItems);
+        DupeMaxAvgDist = settings.DupeMaxAvgDist;
+        DupeFramesCsv = settings.DupeFramesCsv;
+        Status = $"Database: {DbPath}";
     }
+
+    /// <summary>Called when the main window closes.</summary>
+    public void SaveSettings() => new AppSettings
+    {
+        DbPath = DbPath,
+        QuarantineRoot = QuarantineRoot,
+        DupeClearExisting = DupeClearExisting,
+        DupeTolSec = DupeTolSec,
+        DupeMinItems = DupeMinItems,
+        DupeMaxAvgDist = DupeMaxAvgDist,
+        DupeFramesCsv = DupeFramesCsv
+    }.Save(AppPaths.SettingsFile);
+
+    private AppDb? _db;
+
+    // The schema check runs once per database instead of before every command.
+    private async Task<AppDb> OpenDbAsync()
+    {
+        var path = Path.GetFullPath(DbPath);
+        if (_db is null || _dbPath != path)
+        {
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+            var db = new AppDb(path);
+            await DbInitializer.EnsureCreatedAsync(db);
+            (_db, _dbPath) = (db, path);
+        }
+        return _db;
+    }
+
+    private string? _dbPath;
+
+    private static Window? MainWindow() =>
+        (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
 
     partial void OnSelectedGroupChanged(GroupVm? oldValue, GroupVm? newValue)
     {
@@ -157,22 +206,9 @@ public partial class MainViewModel : ObservableObject
         catch (OperationCanceledException) { }
     }
 
-    private List<int> ParseFrames(string? csv)
-    {
-        if (string.IsNullOrWhiteSpace(csv))
-            return new List<int> { 20, 50, 80 };
-
-        var parsed = csv.Split(',')
-            .Select(s => s.Trim())
-            .Where(s => int.TryParse(s, out _))
-            .Select(int.Parse)
-            .Where(p => p > 0 && p < 100)
-            .Distinct()
-            .OrderBy(p => p)
-            .ToList();
-
-        return parsed.Count > 0 ? parsed : new List<int> { 20, 50, 80 };
-    }
+    private static List<int> ParseFrames(string? csv) =>
+        DupeBuildService.NormalizePositions((csv ?? "").Split(',')
+            .Select(s => int.TryParse(s.Trim(), out var p) ? p : -1));
 
     [RelayCommand]
     public async Task AddRootFromTextAsync()
@@ -194,8 +230,7 @@ public partial class MainViewModel : ObservableObject
                 return;
             }
 
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             await db.AddScanRootAsync(path);
 
@@ -228,10 +263,22 @@ public partial class MainViewModel : ObservableObject
                 return;
             }
 
+            var recycle = OperatingSystem.IsWindows();
+            if (File.Exists(m.Path) && MainWindow() is { } owner &&
+                !await ConfirmDialog.ShowAsync(owner, "Delete file",
+                    recycle
+                        ? $"Move this file to the Recycle Bin?\n\n{m.Path}"
+                        : $"Permanently delete this file? This cannot be undone.\n\n{m.Path}",
+                    recycle ? "Move to Recycle Bin" : "Delete permanently"))
+            {
+                Status = "Delete canceled.";
+                return;
+            }
+
             // 1) Datei löschen (Windows -> Recycle Bin)
             if (File.Exists(m.Path))
             {
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                if (recycle)
                 {
                     Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
                         m.Path,
@@ -245,8 +292,7 @@ public partial class MainViewModel : ObservableObject
             }
 
             // 2) In DB markieren (wichtig, sonst bleibt die Datei "aktiv" in späteren Läufen)
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
             await db.MarkMediaFileDeletedAsync(m.MediaFileId);
 
             Status = "Deleted and marked in DB.";
@@ -316,8 +362,7 @@ public partial class MainViewModel : ObservableObject
             EnterBusy();
             Status = "Loading groups...";
 
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             var groups = await db.ListDuplicateGroupsWithMembersAsync();
             var decisions = await db.GetDecisionsAsync(
@@ -370,34 +415,6 @@ public partial class MainViewModel : ObservableObject
 
         await LoadThumbnailsInternalAsync(_thumbCts.Token);
     }
-    private async Task RunCliAsync(string args)
-    {
-        // args example: "scan-index --db=videodedupe.db"
-        var psi = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            Arguments = $"run --project \"{Path.GetFullPath("src/VideoDedupe.Cli")}\" -- {args}",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-
-        using var p = Process.Start(psi)!;
-
-        // simple: read all
-        var stdout = await p.StandardOutput.ReadToEndAsync();
-        var stderr = await p.StandardError.ReadToEndAsync();
-        await p.WaitForExitAsync();
-
-        if (p.ExitCode != 0)
-            throw new Exception($"CLI failed: {stderr}");
-
-        // show last line
-        var last = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
-        Status = last ?? "Done.";
-    }
-
     [RelayCommand]
     public void CancelScanIndex()
     {
@@ -426,8 +443,7 @@ public partial class MainViewModel : ObservableObject
             _indexCts = new CancellationTokenSource();
             var ct = _indexCts.Token;
 
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             var tools = new FfmpegTools();
             var probe = new FfprobeService(tools);
@@ -469,8 +485,7 @@ public partial class MainViewModel : ObservableObject
         {
             EnterBusy();
 
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             foreach (var r in Roots)
                 await db.SetScanRootEnabledAsync(r.Id, r.IsEnabled);
@@ -496,8 +511,7 @@ public partial class MainViewModel : ObservableObject
         {
             EnterBusy();
 
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             await db.DeleteScanRootAsync(SelectedRoot.Id);
 
@@ -537,8 +551,7 @@ public partial class MainViewModel : ObservableObject
             _dupeCts = new CancellationTokenSource();
             var ct = _dupeCts.Token;
 
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             var tools = new FfmpegTools();
             var extractor = new FfmpegFrameExtractor(tools);
@@ -626,8 +639,7 @@ public partial class MainViewModel : ObservableObject
         try
         {
             EnterBusy();
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             await db.UpdateScanRootOptionsAsync(
                 SelectedRoot.Id,
@@ -692,8 +704,7 @@ public partial class MainViewModel : ObservableObject
             if (string.IsNullOrWhiteSpace(localPath))
                 return;
 
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             await db.AddScanRootAsync(localPath);
 
@@ -718,8 +729,7 @@ public partial class MainViewModel : ObservableObject
             EnterBusy();
             Status = "Loading roots...";
 
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             var roots = await db.ListScanRootsAsync();
 
@@ -757,10 +767,10 @@ public partial class MainViewModel : ObservableObject
             EnterBusy();
             Status = "Loading thumbnails...";
 
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
-            var positions = new[] { 20, 50, 80 };
+            // The member view has three thumbnail slots: show the first three detection positions.
+            var positions = ParseFrames(DupeFramesCsv).Take(3).ToArray();
 
             // limit concurrency (disk + ffmpeg)
             using var sem = new SemaphoreSlim(2);
@@ -816,7 +826,7 @@ public partial class MainViewModel : ObservableObject
 
                 if (_thumbCache.TryGetValue(key, out var cached))
                 {
-                    SetThumb(m, pos, cached);
+                    SetThumb(m, Array.IndexOf(positions, pos), cached);
                     continue;
                 }
 
@@ -862,7 +872,7 @@ public partial class MainViewModel : ObservableObject
 
                 // The group may have been deselected while decoding; it must not hold bitmaps.
                 ct.ThrowIfCancellationRequested();
-                SetThumb(m, pos, bmp);
+                SetThumb(m, Array.IndexOf(positions, pos), bmp);
             }
         }
         finally
@@ -922,13 +932,13 @@ public partial class MainViewModel : ObservableObject
         if (SelectedGroup is null || !FilteredGroups.Contains(SelectedGroup))
             SelectedGroup = FilteredGroups.FirstOrDefault();
     }
-    private static void SetThumb(MemberVm m, int pos, Bitmap bmp)
+    private static void SetThumb(MemberVm m, int slot, Bitmap bmp)
     {
-        switch (pos)
+        switch (slot)
         {
-            case 20: m.Thumb20 = bmp; break;
-            case 50: m.Thumb50 = bmp; break;
-            case 80: m.Thumb80 = bmp; break;
+            case 0: m.Thumb20 = bmp; break;
+            case 1: m.Thumb50 = bmp; break;
+            case 2: m.Thumb80 = bmp; break;
         }
     }
 
@@ -966,8 +976,7 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             await db.UpsertDecisionAsync(m.MediaId, "keep", note: m.Path);
 
@@ -990,8 +999,7 @@ public partial class MainViewModel : ObservableObject
             EnterBusy();
             Status = "Quarantining...";
 
-            var db = new AppDb(DbPath);
-            await DbInitializer.EnsureCreatedAsync(db);
+            var db = await OpenDbAsync();
 
             if (!File.Exists(m.Path))
             {
@@ -1077,15 +1085,27 @@ public partial class MainViewModel : ObservableObject
                 return;
             }
 
-            // Windows: highlight file in Explorer
-            Process.Start(new ProcessStartInfo
+            if (OperatingSystem.IsWindows())
             {
-                FileName = "explorer.exe",
-                Arguments = $"/select,\"{m.Path}\"",
-                UseShellExecute = true
-            });
+                // Highlight the file. Explorer parses "/select,<path>" itself, so this exact
+                // quoting is required (ArgumentList would quote the whole switch).
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = $"/select,\"{m.Path}\"",
+                    UseShellExecute = true
+                });
+            }
+            else
+            {
+                // macOS can reveal the file; elsewhere open its folder.
+                var psi = OperatingSystem.IsMacOS()
+                    ? new ProcessStartInfo("open") { ArgumentList = { "-R", m.Path } }
+                    : new ProcessStartInfo("xdg-open") { ArgumentList = { Path.GetDirectoryName(m.Path)! } };
+                Process.Start(psi);
+            }
 
-            Status = "Opened Explorer.";
+            Status = "Opened file location.";
         }
         catch (Exception ex)
         {

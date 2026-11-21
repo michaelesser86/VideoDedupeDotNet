@@ -1,5 +1,3 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using VideoDedupe.Core;
 using VideoDedupe.Infrastructure;
 
@@ -58,39 +56,11 @@ public class VisualHashTests
         Assert.Equal(new[] { 2.5, 5.0, 7.5 }, selected);
     }
 
-    private static byte[] CreateImage(int bars)
-    {
-        using var image = new Image<Rgba32>(80, 60 + bars * 2);
-        for (var y = bars; y < bars + 60; y++)
-            for (var x = 0; x < image.Width; x++)
-            {
-                var value = (byte)((x * 3 + (y - bars) * 5) % 256);
-                image[x, y] = new Rgba32(value, (byte)(255 - value), value);
-            }
-        using var stream = new MemoryStream();
-        image.SaveAsPng(stream);
-        return stream.ToArray();
-    }
+    private static GrayFrame CreateImage(int bars) =>
+        Frames.Create(80, 60 + bars * 2, (x, y) =>
+            y < bars || y >= bars + 60 ? (byte)0 : (byte)((x * 3 + (y - bars) * 5) % 256));
 
-    private static byte[] CreateSolidImage(byte value)
-    {
-        using var image = new Image<Rgba32>(32, 32, new Rgba32(value, value, value));
-        using var stream = new MemoryStream();
-        image.SaveAsPng(stream);
-        return stream.ToArray();
-    }
+    private static GrayFrame CreateSolidImage(byte value) => Frames.Create(32, 32, (_, _) => value);
 
-    private static byte[] CreateStripedImage()
-    {
-        using var image = new Image<Rgba32>(32, 32);
-        for (var y = 0; y < 32; y++)
-            for (var x = 0; x < 32; x++)
-            {
-                var value = (byte)(x % 4 < 2 ? 20 : 230);
-                image[x, y] = new Rgba32(value, value, value);
-            }
-        using var stream = new MemoryStream();
-        image.SaveAsPng(stream);
-        return stream.ToArray();
-    }
+    private static GrayFrame CreateStripedImage() => Frames.Create(32, 32, (x, _) => (byte)(x % 4 < 2 ? 20 : 230));
 }

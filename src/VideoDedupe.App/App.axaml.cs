@@ -1,11 +1,8 @@
-using System;
-using System.IO;
-
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 
-using VideoDedupe.Infrastructure;
+using VideoDedupe.App.ViewModels;
 
 namespace VideoDedupe.App;
 
@@ -22,11 +19,10 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var dbPath = Path.Combine(AppContext.BaseDirectory, "videodedupe.db");
-            var db = new AppDb(dbPath);
-            DbInitializer.EnsureCreatedAsync(db).GetAwaiter().GetResult();
-
-            desktop.MainWindow = new VideoDedupe.App.Views.MainWindow();
+            // The database is created lazily by the view model, at the path from the settings.
+            var window = new Views.MainWindow();
+            window.Closing += (_, _) => (window.DataContext as MainViewModel)?.SaveSettings();
+            desktop.MainWindow = window;
         }
 
         base.OnFrameworkInitializationCompleted();

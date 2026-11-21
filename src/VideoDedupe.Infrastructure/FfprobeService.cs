@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 
-using VideoDedupe.Infrastructure;
+namespace VideoDedupe.Infrastructure;
 
 public sealed partial class FfprobeService
 {
@@ -19,10 +19,8 @@ public sealed partial class FfprobeService
 
     public async Task<ProbeResult> ProbeAsync(string filePath, CancellationToken ct)
     {
-        var args =
-            "-v error -print_format json " +
-            "-show_format -show_streams " +
-            $"\"{filePath}\"";
+        string[] args =
+            ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", filePath];
 
         var (exitCode, stdout, stderr) = await _tools.RunAsync(_tools.FfprobePath, args, ct);
 

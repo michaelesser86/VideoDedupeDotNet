@@ -93,6 +93,24 @@ public class IndexTests
     }
 
     [Fact]
+    public async Task IndexesCommonVideoContainersCaseInsensitively()
+    {
+        using var workspace = new TestWorkspace();
+        var db = workspace.Db;
+        await DbInitializer.EnsureCreatedAsync(db);
+        foreach (var name in new[] { "a.MKV", "b.webm", "c.Mov", "d.mp4", "notes.txt", "e.mp4.part" })
+            workspace.CreateFile($"lib/{name}");
+        await db.AddScanRootAsync(Path.Combine(workspace.Root, "lib"));
+        var service = new IndexService(db,
+            new FfprobeService(new FfmpegTools(ffprobePath: Path.Combine(workspace.Root, "missing-ffprobe"))));
+
+        await service.RunAsync(null, CancellationToken.None);
+
+        var names = (await db.ListMediaFilesAsync()).Select(f => Path.GetFileName(f.Path)).Order();
+        Assert.Equal(new[] { "a.MKV", "b.webm", "c.Mov", "d.mp4" }, names);
+    }
+
+    [Fact]
     public async Task RejectsMissingEnabledRoots()
     {
         using var workspace = new TestWorkspace();

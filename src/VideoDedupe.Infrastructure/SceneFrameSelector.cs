@@ -22,8 +22,8 @@ public sealed class SceneFrameSelector
             // Decoding only keyframes at low resolution is several times faster than a full decode.
             // Encoders place keyframes on hard cuts, so the detected cuts stay the same; otherwise
             // the next keyframe (still inside the new scene) is reported.
-            var args = $"-hide_banner -loglevel info -skip_frame nokey -i \"{filePath}\" " +
-                $"-vf \"scale=160:-2,select='gt(scene,{threshold})',showinfo\" -an -sn -dn -f null -";
+            string[] args = ["-hide_banner", "-loglevel", "info", "-skip_frame", "nokey", "-i", filePath,
+                "-vf", $"scale=160:-2,select='gt(scene,{threshold})',showinfo", "-an", "-sn", "-dn", "-f", "null", "-"];
             var result = await _tools.RunAsync(_tools.FfmpegPath, args, ct);
             if (result.ExitCode == 0)
                 timestamps = ParseTimestamps(result.StdErr, durationSec).ToList();

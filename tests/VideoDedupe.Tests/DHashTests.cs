@@ -1,5 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using System.Text;
 using VideoDedupe.Core;
 
 namespace VideoDedupe.Tests;
@@ -11,16 +10,8 @@ public class DHashTests
     [InlineData(true, ulong.MaxValue)]
     public void OppositeGradientsProduceOppositeHashes(bool descending, ulong expected)
     {
-        using var image = new Image<Rgba32>(9, 8);
-        for (var y = 0; y < 8; y++)
-            for (var x = 0; x < 9; x++)
-            {
-                var value = (byte)((descending ? 8 - x : x) * 30);
-                image[x, y] = new Rgba32(value, value, value);
-            }
-        using var png = new MemoryStream();
-        image.SaveAsPng(png);
-        Assert.Equal(expected, new DHashService().ComputeDHash64(png.ToArray()));
+        var frame = Frames.Create(9, 8, (x, _) => (byte)((descending ? 8 - x : x) * 30));
+        Assert.Equal(expected, new DHashService().ComputeDHash64(frame));
     }
 
     [Theory]
@@ -35,8 +26,42 @@ public class DHashTests
     }
 
     [Fact]
-    public void RejectsEmptyImage()
+    public void ParsesPgmIncludingHeaderComments()
     {
-        Assert.Throws<ArgumentException>(() => new DHashService().ComputeDHash64(Array.Empty<byte>()));
+        var header = Encoding.ASCII.GetBytes("P5\n# from ffmpeg\n3 2\n255\n");
+        var frame = GrayFrame.ParsePgm([.. header, 1, 2, 3, 4, 5, 6]);
+
+        Assert.Equal(3, frame.Width);
+        Assert.Equal(2, frame.Height);
+        Assert.Equal(6, frame[2, 1]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("P6\n1 1\n255\n\0\0\0")]
+    [InlineData("P5\n4 4\n255\n\0")]
+    [InlineData("P5\n1 1\n65535\n\0\0")]
+    public void RejectsInvalidPgm(string data)
+    {
+        Assert.Throws<InvalidDataException>(() => GrayFrame.ParsePgm(Encoding.Latin1.GetBytes(data)));
+    }
+
+    [Fact]
+    public void AreaDownscaleAveragesCoveredPixels()
+    {
+        var frame = new GrayFrame(4, 2, [0, 100, 200, 40, 0, 100, 200, 40]);
+        Assert.Equal(new[] { 50.0, 120.0 }, frame.Downscale((0, 0, 4, 2), 2, 1));
+    }
+}
+
+internal static class Frames
+{
+    public static GrayFrame Create(int width, int height, Func<int, int, byte> pixel)
+    {
+        var pixels = new byte[width * height];
+        for (var y = 0; y < height; y++)
+            for (var x = 0; x < width; x++)
+                pixels[y * width + x] = pixel(x, y);
+        return new GrayFrame(width, height, pixels);
     }
 }

@@ -1,524 +1,154 @@
+using System.Globalization;
+
 using VideoDedupe.Core;
 using VideoDedupe.Infrastructure;
 
-string dbPath = "videodedupe.db";
+var dbPath = AppPaths.DefaultDatabase;
 var remaining = new List<string>();
-
 foreach (var a in args)
 {
     if (a.StartsWith("--db=", StringComparison.OrdinalIgnoreCase))
-        dbPath = a.Split("=", 2)[1];
+        dbPath = a.Split('=', 2)[1];
     else
         remaining.Add(a);
 }
 
 if (remaining.Count == 0)
 {
-    Console.WriteLine("Usage:");
-    Console.WriteLine("  scan-index [--db=videodedupe.db]");
-    Console.WriteLine("  files-list [--db=videodedupe.db]");
-    Console.WriteLine("  dupe-candidates [--db=videodedupe.db] [--tol=0.25] [--min=2]");
-    Console.WriteLine("  dupe-verify [--db=videodedupe.db] [--tol=0.25] [--min=2] [--maxdist=6]");
-    Console.WriteLine("  dupe-build [--db=videodedupe.db] [--tol=0.25] [--min=2] [--maxdist=10] [--frames=20,50,80] [--clear=true]");
-    Console.WriteLine("  dupe-list [--db=videodedupe.db] [--take=20]");
-    Console.WriteLine("  roots-add <path> [--db=videodedupe.db]");
-    Console.WriteLine("  roots-list [--db=videodedupe.db]");
-    Console.WriteLine("  roots-toggle <id> [--db=videodedupe.db]");
-    return;
+    Console.WriteLine($"""
+        Usage (default database: {AppPaths.DefaultDatabase}):
+          roots-add <path>          [--db=<file>]
+          roots-list                [--db=<file>]
+          roots-toggle <id>         [--db=<file>]
+          scan-index                [--db=<file>]
+          files-list                [--db=<file>] [--take=50]
+          dupe-candidates           [--db=<file>] [--tol=0.25] [--min=2]
+          dupe-build                [--db=<file>] [--tol=0.25] [--min=2] [--maxdist=10] [--frames=20,50,80]
+                                    [--clear=true] [--refine-frames=6] [--scene-threshold=0.3]
+                                    [--max-phash=16] [--margin=4] [--parallel=0]
+          dupe-list                 [--db=<file>] [--take=20]
+        """);
+    return 1;
 }
 
 var db = new AppDb(dbPath);
 await DbInitializer.EnsureCreatedAsync(db);
+var options = remaining.Skip(1).ToList();
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-var cmd = remaining[0];
-
-switch (cmd)
+try
 {
-    case "roots-add":
-        {
-            if (remaining.Count < 2) { Console.WriteLine("Missing path"); return; }
-            var id = await db.AddScanRootAsync(remaining[1]);
-            Console.WriteLine($"Added root id={id} path={remaining[1]}");
-            break;
-        }
-    case "roots-list":
-        {
-            var roots = await db.ListScanRootsAsync();
-            foreach (var r in roots)
-                Console.WriteLine($"{r.Id}\t{r.IsEnabled}\t{r.Path}");
-            break;
-        }
-    case "roots-toggle":
-        {
-            if (remaining.Count < 2 || !long.TryParse(remaining[1], out var rid))
+    switch (remaining[0])
+    {
+        case "roots-add":
             {
-                Console.WriteLine("Missing/invalid id");
-                return;
+                if (options.Count == 0) { Console.Error.WriteLine("Missing path"); return 1; }
+                var id = await db.AddScanRootAsync(options[0]);
+                Console.WriteLine($"Added root id={id} path={options[0]}");
+                break;
             }
-            await db.ToggleScanRootAsync(rid);
-            Console.WriteLine($"Toggled root id={rid}");
+        case "roots-list":
+            foreach (var r in await db.ListScanRootsAsync())
+                Console.WriteLine($"{r.Id}\t{(r.IsEnabled == 1 ? "on" : "off")}\t{r.Path}");
             break;
-        }
-    case "files-list":
-        {
-            var rows = await db.ListMediaFilesAsync(50);
-            foreach (var f in rows)
+        case "roots-toggle":
+            {
+                if (options.Count == 0 || !long.TryParse(options[0], out var rid))
+                {
+                    Console.Error.WriteLine("Missing/invalid id");
+                    return 1;
+                }
+                await db.ToggleScanRootAsync(rid);
+                Console.WriteLine($"Toggled root id={rid}");
+                break;
+            }
+        case "files-list":
+            foreach (var f in await db.ListMediaFilesAsync(IntOption("--take", 50)))
                 Console.WriteLine($"{f.Id}\t{f.SizeBytes}\t{f.ModifiedUtc}\t{f.Path}");
             break;
-        }
-
-    case "scan-index":
-        {
-            var tools = new FfmpegTools();
-            var probe = new FfprobeService(tools);
-            var svc = new IndexService(db, probe);
-
-            var progress = new Progress<IndexProgress>(p =>
+        case "scan-index":
             {
-                if (p.Error is not null)
-                    Console.Error.WriteLine($"Probe failed: {p.CurrentPath}: {p.Error}");
-                if (p.Processed % 100 == 0)
-                    Console.WriteLine($"Indexed {p.Processed}/{p.Discovered} ok={p.ProbedOk} fail={p.ProbedFail}");
-            });
-
-            await svc.RunAsync(progress, CancellationToken.None);
-
-            Console.WriteLine("Index finished.");
-            break;
-        }
-
-
-    case "dupe-candidates":
-        {
-            // defaults
-            double tol = 0.25;
-            int minItems = 2;
-
-            // parse optional args from remaining list: --tol=0.25 --min=2
-            foreach (var a in remaining.Skip(1))
-            {
-                if (a.StartsWith("--tol=", StringComparison.OrdinalIgnoreCase) &&
-                    double.TryParse(a.Split("=", 2)[1], System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out var t))
-                    tol = t;
-
-                if (a.StartsWith("--min=", StringComparison.OrdinalIgnoreCase) &&
-                    int.TryParse(a.Split("=", 2)[1], out var m))
-                    minItems = m;
-            }
-
-            var files = await db.ListMediaFilesForCandidatesAsync();
-
-            var buckets = DurationCandidates.CreateRanges(files, f => f.DurationSec, tol, minItems);
-
-            int groupNo = 0;
-
-            foreach (var b in buckets)
-            {
-                // Overlapping windows preserve pairs near the next seed.
-                var remainingFiles = b.OrderBy(f => f.DurationSec).ToList();
-
-                while (remainingFiles.Count >= minItems)
+                var svc = new IndexService(db, new FfprobeService(new FfmpegTools()));
+                IndexProgress? last = null;
+                var progress = new SynchronousProgress<IndexProgress>(p =>
                 {
-                    var seed = remainingFiles[0];
-                    var seedDur = seed.DurationSec!.Value;
-
-                    var cluster = remainingFiles
-                        .Where(f => Math.Abs(f.DurationSec!.Value - seedDur) <= tol)
-                        .ToList();
-
-                    remainingFiles.RemoveAt(0);
-
-                    if (cluster.Count < minItems)
-                        continue;
-
+                    last = p;
+                    if (p.Error is not null)
+                        Console.Error.WriteLine($"Probe failed: {p.CurrentPath}: {p.Error}");
+                    if (p.Processed > 0 && p.Processed % 100 == 0)
+                        Console.WriteLine($"Indexed {p.Processed}/{p.Discovered}");
+                });
+                await svc.RunAsync(progress, cts.Token);
+                Console.WriteLine($"Index finished. files={last?.Discovered} probed={last?.ProbedOk} " +
+                    $"unchanged={last?.Unchanged} failed={last?.ProbedFail}");
+                break;
+            }
+        case "dupe-candidates":
+            {
+                // Duration-only preview: which files would be compared by dupe-build.
+                var opt = DupeBuildService.ParseArgs(options);
+                var files = await db.ListMediaFilesForCandidatesAsync();
+                var groupNo = 0;
+                foreach (var bucket in DurationCandidates.CreateRanges(files, f => f.DurationSec, opt.TolSec, opt.MinItems))
+                {
                     groupNo++;
-
-                    var avgDur = cluster.Average(x => x.DurationSec!.Value);
-
-                    Console.WriteLine($"\nGroup {groupNo}  ~{avgDur:F2}s  items={cluster.Count}");
-
-                    foreach (var f in cluster.OrderByDescending(x => x.SizeBytes))
-                    {
-                        Console.WriteLine($"  - {f.Path}");
-                        Console.WriteLine($"    dur={f.DurationSec:F2}s  size={(f.SizeBytes / 1024 / 1024)} MiB  codec={f.VideoCodec ?? "?"}");
-                    }
+                    Console.WriteLine($"\nRange {groupNo}  {bucket.Min(f => f.DurationSec):F2}–{bucket.Max(f => f.DurationSec):F2}s  items={bucket.Count}");
+                    foreach (var f in bucket.OrderByDescending(x => x.SizeBytes))
+                        Console.WriteLine($"  - {f.DurationSec,8:F2}s  {f.SizeBytes / 1024 / 1024,6} MiB  {f.VideoCodec ?? "?",-6} {f.Path}");
                 }
+                if (groupNo == 0)
+                    Console.WriteLine("No candidates found. Try a larger tolerance: --tol=0.5");
+                break;
             }
-
-            if (groupNo == 0)
-                Console.WriteLine("No candidates found. Try a larger tolerance: --tol=0.5");
-
-            break;
-        }
-    case "dupe-verify":
-        {
-            // Args:
-            // --tol=0.25 duration tolerance in seconds
-            // --min=2 minimum items per group
-            // --maxdist=10 maximum average hamming distance (0..64)
-            // --frames=20,50,80
-            double tol = 0.25;
-            int minItems = 2;
-            double maxAvgDist = 10.0;
-            var positions = new List<int> { 20, 50, 80 };
-
-            foreach (var a in remaining.Skip(1))
+        case "dupe-build":
             {
-                if (a.StartsWith("--tol=", StringComparison.OrdinalIgnoreCase) &&
-                    double.TryParse(a.Split("=", 2)[1],
-                        System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out var t))
-                    tol = t;
-
-                if (a.StartsWith("--min=", StringComparison.OrdinalIgnoreCase) &&
-                    int.TryParse(a.Split("=", 2)[1], out var m))
-                    minItems = m;
-
-                if (a.StartsWith("--maxdist=", StringComparison.OrdinalIgnoreCase) &&
-                    double.TryParse(a.Split("=", 2)[1],
-                        System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out var d))
-                    maxAvgDist = d;
-
-                if (a.StartsWith("--frames=", StringComparison.OrdinalIgnoreCase))
+                var tools = new FfmpegTools();
+                var svc = new DupeBuildService(db, new FfmpegFrameExtractor(tools), new DHashService());
+                var lastPhase = "";
+                var progress = new SynchronousProgress<DupeBuildProgress>(p =>
                 {
-                    var raw = a.Split("=", 2)[1];
-                    var parsed = raw.Split(',')
-                        .Select(s => s.Trim())
-                        .Where(s => int.TryParse(s, out _))
-                        .Select(int.Parse)
-                        .Where(p => p > 0 && p < 100)
-                        .Distinct()
-                        .OrderBy(p => p)
-                        .ToList();
-
-                    if (parsed.Count > 0)
-                        positions = parsed;
-                }
+                    // One line per phase plus every 25 steps, so long runs stay readable.
+                    if (p.Phase != lastPhase || (p.Done > 0 && p.Done % 25 == 0))
+                        Console.WriteLine($"{p.Phase}: {p.Done}/{p.Total}");
+                    lastPhase = p.Phase;
+                });
+                var saved = await svc.RunAsync(DupeBuildService.ParseArgs(options), progress, cts.Token);
+                Console.WriteLine($"Saved duplicate groups: {saved}");
+                break;
             }
-
-            var tools = new FfmpegTools();
-            var extractor = new FfmpegFrameExtractor(tools);
-            var hasher = new DHashService();
-
-            var files = await db.ListMediaFilesForCandidatesAsync();
-
-            var buckets = DurationCandidates.CreateRanges(files, f => f.DurationSec, tol, minItems);
-
-            int groupNo = 0;
-
-            foreach (var b in buckets)
-            {
-                // refine each bucket into subclusters by duration tolerance
-                var bucketFiles = b.OrderBy(f => f.DurationSec).ToList();
-
-                while (bucketFiles.Count >= minItems)
-                {
-                    var seed = bucketFiles[0];
-                    var seedDur = seed.DurationSec!.Value;
-
-                    var cluster = bucketFiles
-                        .Where(f => Math.Abs(f.DurationSec!.Value - seedDur) <= tol)
-                        .ToList();
-
-                    bucketFiles.RemoveAt(0);
-
-                    if (cluster.Count < minItems)
-                        continue;
-
-                    // Load/compute hashes for each file in the cluster
-                    var verified = new List<(AppDb.MediaFileRow File, Dictionary<int, ulong> Hashes)>();
-
-                    foreach (var f in cluster)
-                    {
-                        if (f.Id == 0) continue;
-
-                        if (f.DurationSec is null || f.DurationSec <= 1.0)
-                        {
-                            Console.WriteLine($"Skip hashes (no/short duration): {f.Path}");
-                            continue;
-                        }
-
-                        if (string.IsNullOrWhiteSpace(f.Path) || !File.Exists(f.Path))
-                        {
-                            Console.WriteLine($"Skip hashes (missing file): {f.Path}");
-                            continue;
-                        }
-
-                        var map = new Dictionary<int, ulong>();
-
-                        foreach (var pos in positions)
-                        {
-                            var h = await db.GetFrameHashAsync(f.Id, pos);
-
-                            if (h is null)
-                            {
-                                try
-                                {
-                                    var dur = f.DurationSec!.Value;
-
-                                    // sanity check – Duration kaputt?
-                                    if (dur <= 1.0 || dur > 48 * 3600)
-                                    {
-                                        Console.WriteLine($"Skip frame {pos}% (bad duration={dur}): {f.Path}");
-                                        continue;
-                                    }
-
-                                    // Timestamp berechnen
-                                    var ts = dur * (pos / 100.0);
-
-                                    // Clamp: ffmpeg darf nie außerhalb des Videos seeken
-                                    ts = Math.Clamp(ts, 0.1, Math.Max(0.1, dur - 0.1));
-
-                                    var png = await extractor.ExtractFramePngAsync(f.Path, ts, CancellationToken.None, FfmpegFrameExtractor.HashWidth);
-                                    var computed = hasher.ComputeDHash64(png);
-
-                                    await db.UpsertFrameHashAsync(f.Id, pos, computed);
-                                    h = computed;
-                                }
-                                catch (Exception ex) when (MediaErrors.IsRecoverable(ex))
-                                {
-                                    Console.WriteLine($"Skip frame {pos}%: {f.Path} :: {ex.Message}");
-                                    continue;
-                                }
-                            }
-
-                            if (h is not null)
-                                map[pos] = h.Value;
-                        }
-
-                        if (map.Count == 0)
-                            continue;
-
-                        verified.Add((f, map));
-                    }
-
-                    if (verified.Count < minItems)
-                        continue;
-
-                    // Use first verified as seed; compare by average Hamming across shared positions
-                    var seedHashes = verified[0].Hashes;
-
-                    double AvgDist(Dictionary<int, ulong> a, Dictionary<int, ulong> c)
-                    {
-                        var keys = a.Keys.Intersect(c.Keys).ToList();
-                        if (keys.Count == 0) return 9999;
-
-                        double sum = 0;
-                        foreach (var k in keys)
-                            sum += DHashService.HammingDistance(a[k], c[k]);
-
-                        return sum / keys.Count;
-                    }
-
-                    var final = verified
-                        .Select(v => (v.File, Avg: AvgDist(seedHashes, v.Hashes)))
-                        .Where(x => x.Avg <= maxAvgDist)
-                        .OrderBy(x => x.Avg)
-                        .ToList();
-
-                    if (final.Count < minItems)
-                        continue;
-
-                    groupNo++;
-
-                    foreach (var match in final)
-                        bucketFiles.Remove(match.File);
-                    var avgDur = final.Average(x => x.File.DurationSec!.Value);
-
-                    Console.WriteLine($"\nVerified Group {groupNo}  ~{avgDur:F2}s  items={final.Count}  tol={tol}  maxAvgDist={maxAvgDist}  frames={string.Join(",", positions)}");
-
-                    foreach (var x in final.OrderByDescending(z => z.File.SizeBytes))
-                    {
-                        Console.WriteLine($"  - avgDist={x.Avg,5:F1}  {x.File.Path}");
-                        Console.WriteLine($"    dur={x.File.DurationSec:F2}s  size={(x.File.SizeBytes / 1024 / 1024)} MiB  codec={x.File.VideoCodec ?? "?"}");
-                    }
-                }
-            }
-
-            if (groupNo == 0)
-                Console.WriteLine("No verified duplicates found. Try --tol=0.5 or --maxdist=12 or --frames=50");
-
-            break;
-        }
-    case "files-index":
-        {
-            Console.WriteLine("Indexing files...");
-
-            var roots = await db.ListScanRootsAsync();
-            if (roots.Count == 0)
-            {
-                Console.WriteLine("No scan roots configured. Use roots-add first.");
-                return;
-            }
-
-            var exts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        ".mp4", ".mkv", ".avi", ".mov", ".wmv"
-    };
-
-            int added = 0;
-            int skipped = 0;
-
-            foreach (var r in roots)
-            {
-                if (!Directory.Exists(r.Path))
-                {
-                    Console.WriteLine($"Missing root: {r.Path}");
-                    continue;
-                }
-
-                Console.WriteLine($"Scanning {r.Path}");
-
-                foreach (var file in Directory.EnumerateFiles(r.Path, "*.*", SearchOption.AllDirectories))
-                {
-                    if (!exts.Contains(Path.GetExtension(file)))
-                        continue;
-
-                    try
-                    {
-                        var fi = new FileInfo(file);
-
-                        await db.UpsertMediaFileStubAsync(
-                            path: fi.FullName,
-                            sizeBytes: fi.Length,
-                            modifiedUtc: fi.LastWriteTimeUtc);
-
-                        added++;
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    {
-                        Console.Error.WriteLine($"Skip file: {file}: {ex.Message}");
-                        skipped++;
-                    }
-                }
-            }
-
-            Console.WriteLine($"Indexed files: {added}, skipped: {skipped}");
-            break;
-        }
-
-    case "dupe-build":
-        {
-            // Defaults
-            double tol = 0.25;
-            int minItems = 2;
-            double maxAvgDist = 10.0;
-            var positions = new List<int> { 20, 50, 80 };
-            bool clear = true;
-
-            foreach (var a in remaining.Skip(1))
-            {
-                if (a.StartsWith("--tol=", StringComparison.OrdinalIgnoreCase) &&
-                    double.TryParse(a.Split("=", 2)[1], System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out var t))
-                    tol = t;
-
-                if (a.StartsWith("--min=", StringComparison.OrdinalIgnoreCase) &&
-                    int.TryParse(a.Split("=", 2)[1], out var m))
-                    minItems = m;
-
-                if (a.StartsWith("--maxdist=", StringComparison.OrdinalIgnoreCase) &&
-                    double.TryParse(a.Split("=", 2)[1], System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out var d))
-                    maxAvgDist = d;
-
-                if (a.StartsWith("--frames=", StringComparison.OrdinalIgnoreCase))
-                {
-                    var raw = a.Split("=", 2)[1];
-                    var parsed = raw.Split(',')
-                        .Select(s => s.Trim())
-                        .Where(s => int.TryParse(s, out _))
-                        .Select(int.Parse)
-                        .Where(p => p > 0 && p < 100)
-                        .Distinct()
-                        .OrderBy(p => p)
-                        .ToList();
-
-                    if (parsed.Count > 0)
-                        positions = parsed;
-                }
-
-                if (a.StartsWith("--clear=", StringComparison.OrdinalIgnoreCase) &&
-                    bool.TryParse(a.Split("=", 2)[1], out var c))
-                    clear = c;
-            }
-
-            var tools = new FfmpegTools();
-            var extractor = new FfmpegFrameExtractor(tools);
-            var hasher = new VideoDedupe.Core.DHashService();
-
-            var svc = new VideoDedupe.Infrastructure.DupeBuildService(db, extractor, hasher);
-
-            var opt = new VideoDedupe.Infrastructure.DupeBuildOptions(
-                ClearExisting: clear,
-                TolSec: tol,
-                MinItems: minItems,
-                MaxAvgDist: maxAvgDist,
-                FramePercents: positions
-            );
-
-            var prog = new Progress<VideoDedupe.Infrastructure.DupeBuildProgress>(p =>
-            {
-                // Console-Ausgabe nicht zu spammy
-                if (p.Total <= 1 || p.Done % 25 == 0)
-                {
-                    var cur = string.IsNullOrWhiteSpace(p.Current) ? "" : $" :: {p.Current}";
-                    Console.WriteLine($"{p.Phase}: {p.Done}/{p.Total}{cur}");
-                }
-            });
-
-            var saved = await svc.RunAsync(opt, prog, CancellationToken.None);
-            Console.WriteLine($"Saved duplicate groups: {saved}");
-            break;
-        }
-    case "dupe-list":
-        {
-            int take = 20;
-
-            foreach (var a in remaining.Skip(1))
-            {
-                if (a.StartsWith("--take=", StringComparison.OrdinalIgnoreCase) &&
-                    int.TryParse(a.Split("=", 2)[1], out var t))
-                    take = t;
-            }
-
-            var groups = await db.ListDuplicateGroupsWithMembersAsync(take);
-
-            foreach (var (g, members) in groups)
+        case "dupe-list":
+            foreach (var (g, members) in await db.ListDuplicateGroupsWithMembersAsync(IntOption("--take", 20)))
             {
                 Console.WriteLine($"\nGroup {g.Id}  algo={g.Algorithm} frames={g.Frames} tol={g.TolSec} maxAvgDist={g.MaxAvgDist} created={g.CreatedUtc}");
                 Console.WriteLine($"Members: {members.Count}");
-
                 foreach (var (f, dist) in members.OrderBy(x => x.AvgDist))
                     Console.WriteLine($"  - avgDist={dist,5:F1}  {f.Path}");
             }
-
             break;
-        }
+        default:
+            Console.Error.WriteLine($"Unknown command: {remaining[0]}");
+            return 1;
+    }
+}
+catch (OperationCanceledException)
+{
+    Console.Error.WriteLine("Canceled.");
+    return 130;
+}
+return 0;
 
-    default:
-        {
-            Console.WriteLine("Unknown command.");
-            break;
-        }
+int IntOption(string name, int fallback) =>
+    options.Select(o => o.Split('=', 2))
+        .Where(p => p.Length == 2 && p[0].Equals(name, StringComparison.OrdinalIgnoreCase))
+        .Select(p => int.TryParse(p[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : fallback)
+        .DefaultIfEmpty(fallback)
+        .Last();
 
-
-        static bool IsExcluded(string path, string? excludeText)
-        {
-            if (string.IsNullOrWhiteSpace(excludeText))
-                return false;
-
-            var tokens = excludeText.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-            foreach (var t in tokens)
-            {
-                // MVP-Regel: wenn Pfad den Token enthält → skip
-                if (t.Length > 0 && path.Contains(t, StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-
-            return false;
-        }
+/// <summary>Reports on the calling thread; <see cref="Progress{T}"/> would post to the thread pool
+/// and could print lines out of order or after the command finished.</summary>
+sealed class SynchronousProgress<T>(Action<T> report) : IProgress<T>
+{
+    private readonly Lock _gate = new();
+    public void Report(T value) { lock (_gate) report(value); }
 }

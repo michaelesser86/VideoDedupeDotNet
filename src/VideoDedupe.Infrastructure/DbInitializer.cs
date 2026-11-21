@@ -13,7 +13,7 @@ public static class DbInitializer
     IsEnabled INTEGER NOT NULL DEFAULT 1,
     AddedUtc TEXT NOT NULL,
     IncludeSubdirs INTEGER NOT NULL DEFAULT 1,
-    ExcludeGlob TEXT NULL
+    ExcludeText TEXT NULL
 );
 
             CREATE TABLE IF NOT EXISTS MediaFile (
@@ -24,7 +24,8 @@ public static class DbInitializer
     LastScannedUtc TEXT NOT NULL
 );
 
-            CREATE INDEX IF NOT EXISTS IX_MediaFile_Path ON MediaFile(Path);
+            -- Path is UNIQUE, which already indexes it.
+            DROP INDEX IF EXISTS IX_MediaFile_Path;
 
            ");
 
@@ -93,6 +94,17 @@ CREATE TABLE IF NOT EXISTS ReviewDecision (
         await db.EnsureColumnAsync("MediaFile", "Fps", "REAL");
         await db.EnsureColumnAsync("MediaFile", "VideoCodec", "TEXT");
         await db.EnsureColumnAsync("MediaFile", "Container", "TEXT");
-    }
 
+        // Cached hashes are only comparable with hashes from the same algorithm. After an
+        // algorithm change they are recomputed once instead of silently mixing both kinds.
+        await db.ExecuteAsync(@"
+CREATE TABLE IF NOT EXISTS Meta (
+  Key TEXT PRIMARY KEY,
+  Value TEXT NOT NULL
+);
+INSERT INTO Meta(Key, Value) VALUES ('HashVersion', '') ON CONFLICT(Key) DO NOTHING;
+DELETE FROM FrameHash WHERE (SELECT Value FROM Meta WHERE Key='HashVersion') IS NOT @Version;
+DELETE FROM VisualHash WHERE (SELECT Value FROM Meta WHERE Key='HashVersion') IS NOT @Version;
+UPDATE Meta SET Value=@Version WHERE Key='HashVersion';", new { Version = Core.DHashService.Version });
+    }
 }
