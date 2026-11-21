@@ -60,6 +60,39 @@ public class IndexTests
     }
 
     [Fact]
+    public async Task SkipsProbeForUnchangedFilesAndReprobesChangedOnes()
+    {
+        using var workspace = new TestWorkspace();
+        var db = workspace.Db;
+        await DbInitializer.EnsureCreatedAsync(db);
+        var unchanged = workspace.CreateFile("lib/unchanged.mp4");
+        var changed = workspace.CreateFile("lib/changed.mp4");
+        await db.AddScanRootAsync(Path.Combine(workspace.Root, "lib"));
+        foreach (var path in new[] { unchanged, changed })
+        {
+            var info = new FileInfo(path);
+            await db.UpsertMediaFileAsync(new AppDb.MediaFileRow
+            {
+                Path = path, SizeBytes = info.Length, DurationSec = 42,
+                ModifiedUtc = info.LastWriteTimeUtc.ToString("O")
+            });
+        }
+        File.AppendAllText(changed, "more");
+        // The probe always fails, so only files that are really re-probed lose their metadata.
+        var service = new IndexService(db,
+            new FfprobeService(new FfmpegTools(ffprobePath: Path.Combine(workspace.Root, "missing-ffprobe"))));
+        var progress = new ProgressRecorder();
+
+        await service.RunAsync(progress, CancellationToken.None);
+
+        var files = await db.ListMediaFilesForCandidatesAsync();
+        Assert.Equal(unchanged, Assert.Single(files).Path);
+        Assert.Equal(1, progress.Last!.Unchanged);
+        Assert.Equal(1, progress.Last.ProbedFail);
+        Assert.Equal(2, progress.Last.Processed);
+    }
+
+    [Fact]
     public async Task RejectsMissingEnabledRoots()
     {
         using var workspace = new TestWorkspace();

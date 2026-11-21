@@ -67,12 +67,13 @@ CREATE TABLE MediaFile(Id INTEGER PRIMARY KEY, Path TEXT);");
         try
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            while (!File.Exists(marker) || new FileInfo(marker).Length == 0)
+            int pid;
+            // The child may still hold the marker open right after writing it.
+            while (!TryReadPid(marker, out pid))
             {
                 if (run.IsCompleted) await run;
                 await Task.Delay(25, deadline.Token);
             }
-            var pid = int.Parse(await File.ReadAllTextAsync(marker));
             process = Process.GetProcessById(pid);
             Assert.False(process.HasExited);
             cts.Cancel();
@@ -90,6 +91,19 @@ CREATE TABLE MediaFile(Id INTEGER PRIMARY KEY, Path TEXT);");
             }
             try { await run.WaitAsync(TimeSpan.FromSeconds(10)); }
             catch (OperationCanceledException) { }
+        }
+    }
+
+    private static bool TryReadPid(string marker, out int pid)
+    {
+        pid = 0;
+        try
+        {
+            return File.Exists(marker) && int.TryParse(File.ReadAllText(marker).Trim(), out pid);
+        }
+        catch (IOException)
+        {
+            return false;
         }
     }
 }

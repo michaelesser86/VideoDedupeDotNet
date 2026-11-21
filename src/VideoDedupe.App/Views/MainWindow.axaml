@@ -177,13 +177,14 @@
               <ProgressBar Minimum="0" Maximum="1" Height="10" Value="{Binding DupePercent}"/>
               <TextBlock Opacity="0.85">
                 <TextBlock.Text>
-                  <MultiBinding StringFormat="{}{0}: {1}/{2}">
+                  <MultiBinding StringFormat="{}{0} - overall: {1}/{2}">
                     <Binding Path="DupePhase"/>
                     <Binding Path="DupeDone"/>
                     <Binding Path="DupeTotal"/>
                   </MultiBinding>
                 </TextBlock.Text>
               </TextBlock>
+              <TextBlock Opacity="0.85" Text="{Binding DupeEta}"/>
               <TextBlock Opacity="0.75"
                          TextTrimming="CharacterEllipsis"
                          Text="{Binding DupeCurrent}"/>

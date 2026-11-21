@@ -15,7 +15,12 @@ namespace VideoDedupe.Infrastructure
 
         private SqliteConnection Open()
         {
-            var cn = new SqliteConnection($"Data Source={_dbPath}");
+            // Cascading deletes rely on this; do not depend on the native library's default.
+            var cn = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = _dbPath,
+                ForeignKeys = true
+            }.ToString());
             cn.Open();
             return cn;
         }
@@ -171,18 +176,52 @@ WHERE Id = @Id;
                     Height=excluded.Height,
                     Fps=excluded.Fps,
                     VideoCodec=excluded.VideoCodec,
-                    Container=excluded.Container;
+                    Container=excluded.Container,
+                    IsDeleted=0;
                     ", row, tx);
             tx.Commit();
         }
 
-        private static Task<int> InvalidateFrameHashesAsync(SqliteConnection cn, SqliteTransaction tx,
-            string path, long sizeBytes, string modifiedUtc) => cn.ExecuteAsync(@"
+        private static async Task InvalidateFrameHashesAsync(SqliteConnection cn, SqliteTransaction tx,
+            string path, long sizeBytes, string modifiedUtc)
+        {
+            var args = new { Path = path, SizeBytes = sizeBytes, ModifiedUtc = modifiedUtc };
+            await cn.ExecuteAsync(@"
 DELETE FROM FrameHash
 WHERE MediaFileId IN (
     SELECT Id FROM MediaFile
     WHERE Path = @Path AND (SizeBytes IS NOT @SizeBytes OR ModifiedUtc IS NOT @ModifiedUtc)
-);", new { Path = path, SizeBytes = sizeBytes, ModifiedUtc = modifiedUtc }, tx);
+);", args, tx);
+            await cn.ExecuteAsync(@"
+DELETE FROM VisualHash
+WHERE MediaFileId IN (
+    SELECT Id FROM MediaFile
+    WHERE Path = @Path AND (SizeBytes IS NOT @SizeBytes OR ModifiedUtc IS NOT @ModifiedUtc)
+);", args, tx);
+        }
+
+        public sealed record IndexedFileState(string Path, long SizeBytes, string ModifiedUtc, double? DurationSec, long IsDeleted);
+
+        public async Task<Dictionary<string, IndexedFileState>> ListIndexedFileStatesAsync()
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<IndexedFileState>(
+                "SELECT Path, SizeBytes, ModifiedUtc, DurationSec, IsDeleted FROM MediaFile;");
+            return rows.ToDictionary(r => r.Path, StringComparer.Ordinal);
+        }
+
+        /// <summary>Active files whose path lies below <paramref name="rootPath"/>.</summary>
+        public async Task<List<(long Id, string Path)>> ListActiveFilesUnderAsync(string rootPath)
+        {
+            var prefix = Path.TrimEndingDirectorySeparator(rootPath) + Path.DirectorySeparatorChar;
+            using var cn = Open();
+            // substr avoids LIKE wildcards ('_', '%') that are legal in folder names.
+            var rows = await cn.QueryAsync<(long Id, string Path)>(@"
+SELECT Id, Path FROM MediaFile
+WHERE IsDeleted = 0 AND substr(Path, 1, length(@Prefix)) = @Prefix COLLATE NOCASE;",
+                new { Prefix = prefix });
+            return rows.ToList();
+        }
 
         public async Task<List<MediaFileRow>> ListMediaFilesAsync(int take = 50)
         {
@@ -224,6 +263,36 @@ WHERE MediaFileId IN (
                 new { Id = mediaFileId, Pct = positionPct });
 
             return v is null ? null : unchecked((ulong)v.Value);
+        }
+
+        /// <summary>All cached frame hashes, keyed by file and position (one query instead of one per frame).</summary>
+        public async Task<Dictionary<long, Dictionary<int, ulong>>> GetAllFrameHashesAsync()
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<(long MediaFileId, int PositionPct, long Hash64)>(
+                "SELECT MediaFileId, PositionPct, Hash64 FROM FrameHash;");
+            return rows.GroupBy(r => r.MediaFileId).ToDictionary(
+                g => g.Key,
+                g => g.ToDictionary(r => r.PositionPct, r => unchecked((ulong)r.Hash64)));
+        }
+
+        public async Task UpsertVisualHashAsync(long mediaFileId, string strategy, int slot, ulong hash64)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(@"
+INSERT INTO VisualHash(MediaFileId, Strategy, Slot, Hash64)
+VALUES (@MediaFileId, @Strategy, @Slot, @Hash64)
+ON CONFLICT(MediaFileId, Strategy, Slot) DO UPDATE SET Hash64=excluded.Hash64;",
+                new { MediaFileId = mediaFileId, Strategy = strategy, Slot = slot, Hash64 = unchecked((long)hash64) });
+        }
+
+        public async Task<Dictionary<int, ulong>> GetVisualHashesAsync(long mediaFileId, string strategy)
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<(int Slot, long Hash64)>(@"
+SELECT Slot, Hash64 FROM VisualHash
+WHERE MediaFileId=@MediaFileId AND Strategy=@Strategy;", new { MediaFileId = mediaFileId, Strategy = strategy });
+            return rows.ToDictionary(row => row.Slot, row => unchecked((ulong)row.Hash64));
         }
 
 
@@ -270,6 +339,7 @@ VALUES (@GroupId, @MediaFileId, @AvgDist);
 
         private sealed class MemberJoinRow
         {
+            public long GroupId { get; set; }
             public double AvgDist { get; set; }
             public long Id { get; set; }
             public string Path { get; set; } = "";
@@ -303,6 +373,32 @@ ON CONFLICT(MediaFileId) DO UPDATE SET
             });
         }
 
+        /// <summary>Records the move and removes the file from the active library in one step.</summary>
+        public async Task MarkMediaFileQuarantinedAsync(long mediaFileId, string quarantinePath)
+        {
+            using var cn = Open();
+            using var tx = cn.BeginTransaction();
+            await cn.ExecuteAsync(@"
+INSERT INTO ReviewDecision(MediaFileId, Decision, Note, DecidedUtc)
+VALUES (@Id, 'quarantine', @Note, @Utc)
+ON CONFLICT(MediaFileId) DO UPDATE SET
+  Decision=excluded.Decision,
+  Note=excluded.Note,
+  DecidedUtc=excluded.DecidedUtc;
+UPDATE MediaFile SET IsDeleted=1 WHERE Id=@Id;",
+                new { Id = mediaFileId, Note = $"moved to: {quarantinePath}", Utc = DateTime.UtcNow.ToString("O") }, tx);
+            tx.Commit();
+        }
+
+        public async Task<Dictionary<long, string>> GetDecisionsAsync(IEnumerable<long> mediaFileIds)
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<(long MediaFileId, string Decision)>(
+                "SELECT MediaFileId, Decision FROM ReviewDecision WHERE MediaFileId IN @Ids",
+                new { Ids = mediaFileIds.Distinct().ToArray() });
+            return rows.ToDictionary(r => r.MediaFileId, r => r.Decision);
+        }
+
         public async Task<(string Decision, string? Note, string DecidedUtc)?> GetDecisionAsync(long mediaFileId)
         {
             using var cn = Open();
@@ -328,12 +424,10 @@ ORDER BY Id DESC
 " + (take is null ? ";" : "LIMIT @Take;");
             var groups = (await cn.QueryAsync<DuplicateGroupRow>(groupQuery, new { Take = take })).ToList();
 
-            var result = new List<(DuplicateGroupRow, List<(MediaFileRow, double)>)>();
-
-            foreach (var g in groups)
-            {
-                var rows = (await cn.QueryAsync<MemberJoinRow>(@"
+            // One query for all members instead of one per group.
+            var membersByGroup = (await cn.QueryAsync<MemberJoinRow>(@"
 SELECT
+  m.GroupId as GroupId,
   m.AvgDist as AvgDist,
   f.Id as Id,
   f.Path as Path,
@@ -348,11 +442,16 @@ SELECT
   f.Container as Container
 FROM DuplicateMember m
 JOIN MediaFile f ON f.Id = m.MediaFileId
-WHERE m.GroupId = @GroupId AND f.IsDeleted = 0
+WHERE m.GroupId IN @GroupIds AND f.IsDeleted = 0
 ORDER BY m.AvgDist ASC;
-", new { GroupId = g.Id })).ToList();
+", new { GroupIds = groups.Select(g => g.Id).ToArray() }))
+                .ToLookup(r => r.GroupId);
 
-                var members = rows.Select(r =>
+            var result = new List<(DuplicateGroupRow, List<(MediaFileRow, double)>)>();
+
+            foreach (var g in groups)
+            {
+                var members = membersByGroup[g.Id].Select(r =>
                 (
                     new MediaFileRow
                     {

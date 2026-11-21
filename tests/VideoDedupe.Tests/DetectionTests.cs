@@ -34,10 +34,14 @@ public class DetectionTests
         var service = new DupeBuildService(db,
             new FfmpegFrameExtractor(new FfmpegTools(ffmpegPath: Path.Combine(workspace.Root, "missing-ffmpeg"))),
             new DHashService());
+        var reports = new List<DupeBuildProgress>();
         var count = await service.RunAsync(new DupeBuildOptions(TolSec: tolerance,
-            MaxAvgDist: distance, MinItems: minItems), null, CancellationToken.None);
+            MaxAvgDist: distance, MinItems: minItems), new InlineProgress(reports), CancellationToken.None);
 
         Assert.Equal(expectedGroups, count);
+        var done = Assert.Single(reports, p => p.Phase == "Done");
+        Assert.Equal(files.Count, done.OverallTotal);
+        Assert.Equal(files.Count, done.OverallDone);
         var groups = await db.ListDuplicateGroupsWithMembersAsync();
         Assert.Equal(expectedGroups, groups.Count);
         if (count > 0)
@@ -48,5 +52,10 @@ public class DetectionTests
             Assert.Equal(tolerance, group.Group.TolSec);
             Assert.Equal(distance, group.Group.MaxAvgDist);
         }
+    }
+
+    private sealed class InlineProgress(List<DupeBuildProgress> reports) : IProgress<DupeBuildProgress>
+    {
+        public void Report(DupeBuildProgress value) => reports.Add(value);
     }
 }

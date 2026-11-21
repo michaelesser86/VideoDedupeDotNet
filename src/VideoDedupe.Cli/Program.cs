@@ -271,7 +271,7 @@ switch (cmd)
                                     // Clamp: ffmpeg darf nie außerhalb des Videos seeken
                                     ts = Math.Clamp(ts, 0.1, Math.Max(0.1, dur - 0.1));
 
-                                    var png = await extractor.ExtractFramePngAsync(f.Path, ts, CancellationToken.None);
+                                    var png = await extractor.ExtractFramePngAsync(f.Path, ts, CancellationToken.None, FfmpegFrameExtractor.HashWidth);
                                     var computed = hasher.ComputeDHash64(png);
 
                                     await db.UpsertFrameHashAsync(f.Id, pos, computed);

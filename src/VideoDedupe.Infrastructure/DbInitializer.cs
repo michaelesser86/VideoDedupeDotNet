@@ -42,6 +42,18 @@ public static class DbInitializer
             ");
 
         await db.ExecuteAsync(@"
+            CREATE TABLE IF NOT EXISTS VisualHash (
+            MediaFileId INTEGER NOT NULL,
+            Strategy TEXT NOT NULL,
+            Slot INTEGER NOT NULL,
+            Hash64 INTEGER NOT NULL,
+            PRIMARY KEY(MediaFileId, Strategy, Slot),
+            FOREIGN KEY(MediaFileId) REFERENCES MediaFile(Id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS IX_VisualHash_MediaFileId ON VisualHash(MediaFileId);
+            ");
+
+        await db.ExecuteAsync(@"
 CREATE TABLE IF NOT EXISTS DuplicateGroup (
   Id INTEGER PRIMARY KEY AUTOINCREMENT,
   Algorithm TEXT NOT NULL,           -- e.g. 'dhash'

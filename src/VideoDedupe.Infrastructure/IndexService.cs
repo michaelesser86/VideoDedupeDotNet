@@ -6,7 +6,8 @@ public sealed record IndexProgress(
     int ProbedOk,
     int ProbedFail,
     string? CurrentPath,
-    string? Error = null
+    string? Error = null,
+    int Unchanged = 0
 );
 
 public sealed class IndexService
@@ -62,7 +63,8 @@ public sealed class IndexService
             CurrentPath: null));
 
         // 2) Probe + upsert (limited parallelism)
-        int processed = 0, ok = 0, fail = 0;
+        int processed = 0, ok = 0, fail = 0, unchanged = 0;
+        var known = await _db.ListIndexedFileStatesAsync();
 
         // adjust if you want: 2–4 is a good start
         var parallel = Math.Max(1, Math.Min(Environment.ProcessorCount / 2, 4));
@@ -80,6 +82,17 @@ public sealed class IndexService
 
                 var modifiedUtc = fi.LastWriteTimeUtc.ToString("O");
                 var scannedUtc = DateTime.UtcNow.ToString("O");
+
+                // Same size and timestamp as the last successful probe: ffprobe would only
+                // repeat itself. Failed probes and returning (deleted) files are re-probed.
+                if (known.TryGetValue(full, out var state) && state.IsDeleted == 0 && state.DurationSec is not null &&
+                    state.SizeBytes == fi.Length && state.ModifiedUtc == modifiedUtc)
+                {
+                    Interlocked.Increment(ref unchanged);
+                    progress?.Report(new IndexProgress(files.Count, Interlocked.Increment(ref processed),
+                        Volatile.Read(ref ok), Volatile.Read(ref fail), full, Unchanged: Volatile.Read(ref unchanged)));
+                    return;
+                }
 
                 FfprobeService.ProbeResult meta;
                 string? error = null;
@@ -118,7 +131,8 @@ public sealed class IndexService
                     ProbedOk: Volatile.Read(ref ok),
                     ProbedFail: Volatile.Read(ref fail),
                     CurrentPath: full,
-                    Error: error));
+                    Error: error,
+                    Unchanged: Volatile.Read(ref unchanged)));
             }
             finally
             {
@@ -128,12 +142,25 @@ public sealed class IndexService
 
         await Task.WhenAll(tasks);
 
+        // 3) Files that vanished from a reachable root leave the active library. A missing
+        //    root (e.g. an unplugged drive) was skipped above and is left untouched here.
+        foreach (var r in enabled.Where(r => Directory.Exists(r.Path)))
+        {
+            foreach (var (id, path) in await _db.ListActiveFilesUnderAsync(r.Path))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!File.Exists(path))
+                    await _db.MarkMediaFileDeletedAsync(id);
+            }
+        }
+
         progress?.Report(new IndexProgress(
             Discovered: files.Count,
             Processed: processed,
             ProbedOk: ok,
             ProbedFail: fail,
-            CurrentPath: null));
+            CurrentPath: null,
+            Unchanged: unchanged));
     }
 
     private static bool IsExcluded(string path, string? excludeText)

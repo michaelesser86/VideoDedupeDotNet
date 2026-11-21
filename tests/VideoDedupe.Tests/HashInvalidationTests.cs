@@ -29,6 +29,7 @@ public class HashInvalidationTests
         var otherId = (await db.ListMediaFilesAsync()).Single(f => f.Id != id).Id;
         foreach (var position in new[] { 20, 50, 80 })
             await db.UpsertFrameHashAsync(id, position, ulong.MaxValue);
+        await db.UpsertVisualHashAsync(id, "scene-phash-v1", 0, 77);
         await db.UpsertFrameHashAsync(otherId, 50, 42);
 
         if (sizeChanged) row.SizeBytes++;
@@ -48,6 +49,9 @@ public class HashInvalidationTests
             if (sizeChanged || timeChanged) Assert.Null(hash);
             else Assert.Equal(ulong.MaxValue, hash);
         }
+        var visualHash = await db.GetVisualHashesAsync(id, "scene-phash-v1");
+        if (sizeChanged || timeChanged) Assert.Empty(visualHash);
+        else Assert.Equal(77UL, visualHash[0]);
         Assert.Equal(42UL, await db.GetFrameHashAsync(otherId, 50));
     }
 

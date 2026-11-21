@@ -43,7 +43,10 @@ public partial class MainViewModel : ObservableObject
 
     private readonly FfmpegTools _tools = new();
     private readonly FfmpegFrameExtractor _extractor;
+    private const int ThumbWidth = 320;
+    private const int ThumbCacheLimit = 300;
     private readonly Dictionary<(string Database, long MediaId, string ModifiedUtc, int Pos), Bitmap> _thumbCache = new();
+    private readonly Queue<(string Database, long MediaId, string ModifiedUtc, int Pos)> _thumbOrder = new();
     private int _busyOperations;
     [ObservableProperty] private bool isIndexing;
     [ObservableProperty] private int indexDiscovered;
@@ -56,6 +59,8 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private int dupeTotal;
     [ObservableProperty] private int dupeDone;
     [ObservableProperty] private string dupeCurrent = "";
+    [ObservableProperty] private string dupeEta = "Estimating remaining time...";
+    private readonly Stopwatch _dupeStopwatch = new();
     // Dupe-build settings (UI)
     [ObservableProperty] private bool dupeClearExisting = true;
     [ObservableProperty] private double dupeTolSec = 0.5;
@@ -82,12 +87,12 @@ public partial class MainViewModel : ObservableObject
     {
         _indexCts?.Cancel();
         _dupeCts?.Cancel();
-        CancelAndClearThumbnails();
         Roots.Clear();
         Groups.Clear();
         FilteredGroups.Clear();
         SelectedRoot = null;
         SelectedGroup = null;
+        CancelAndClearThumbnails();
         Status = "Database changed. Load roots or groups for the selected database.";
     }
 
@@ -108,39 +113,48 @@ public partial class MainViewModel : ObservableObject
         _thumbCts?.Cancel();
         _thumbCts?.Dispose();
         _thumbCts = null;
+        // Callers clear Groups/SelectedGroup, so no member keeps showing these bitmaps.
         foreach (var bitmap in _thumbCache.Values)
             bitmap.Dispose();
         _thumbCache.Clear();
+        _thumbOrder.Clear();
     }
     public MainViewModel()
     {
         _extractor = new FfmpegFrameExtractor(_tools);
     }
 
-    partial void OnSelectedGroupChanged(GroupVm? value)
-
+    partial void OnSelectedGroupChanged(GroupVm? oldValue, GroupVm? newValue)
     {
         // Cancel previous thumbnail load
         _thumbCts?.Cancel();
         _thumbCts?.Dispose();
         _thumbCts = null;
 
-        if (value is null)
+        // Only the selected group references cached bitmaps, so eviction can never
+        // dispose a bitmap that is still on screen. Re-selecting reloads from the cache.
+        if (oldValue is not null)
+            foreach (var member in oldValue.Members)
+                member.Thumb20 = member.Thumb50 = member.Thumb80 = null;
+
+        if (newValue is null)
             return;
 
         // Debounce: in case user scrolls quickly
         _thumbCts = new CancellationTokenSource();
-        var ct = _thumbCts.Token;
+        _ = LoadThumbnailsAfterDelayAsync(_thumbCts.Token);
+    }
 
-        _ = Task.Run(async () =>
+    // Runs on the UI thread: the cache, Status and IsBusy are only touched there.
+    // ffmpeg and bitmap decoding are awaited without blocking it.
+    private async Task LoadThumbnailsAfterDelayAsync(CancellationToken ct)
+    {
+        try
         {
-            try
-            {
-                await Task.Delay(200, ct);
-                await LoadThumbnailsInternalAsync(ct);
-            }
-            catch (OperationCanceledException) { }
-        });
+            await Task.Delay(200, ct);
+            await LoadThumbnailsInternalAsync(ct);
+        }
+        catch (OperationCanceledException) { }
     }
 
     private List<int> ParseFrames(string? csv)
@@ -306,6 +320,8 @@ public partial class MainViewModel : ObservableObject
             await DbInitializer.EnsureCreatedAsync(db);
 
             var groups = await db.ListDuplicateGroupsWithMembersAsync();
+            var decisions = await db.GetDecisionsAsync(
+                groups.SelectMany(g => g.Members).Select(member => member.File.Id));
 
             Groups.Clear();
 
@@ -323,7 +339,10 @@ public partial class MainViewModel : ObservableObject
                 };
 
                 foreach (var (file, avgDist) in members)
-                    gvm.Members.Add(new MemberVm(file, avgDist));
+                    gvm.Members.Add(new MemberVm(file, avgDist)
+                    {
+                        Decision = decisions.GetValueOrDefault(file.Id)
+                    });
 
                 MarkBestMember(gvm);
 
@@ -509,6 +528,8 @@ public partial class MainViewModel : ObservableObject
             DupeTotal = 0;
             DupeDone = 0;
             DupeCurrent = "";
+            DupeEta = "Estimating remaining time...";
+            _dupeStopwatch.Restart();
             Status = "Dupe build running...";
 
             _dupeCts?.Cancel();
@@ -541,8 +562,12 @@ public partial class MainViewModel : ObservableObject
             var prog = new Progress<DupeBuildProgress>(p =>
             {
                 DupePhase = p.Phase;
-                DupeTotal = p.Total;
-                DupeDone = p.Done;
+                if (p.OverallTotal > 0)
+                {
+                    DupeTotal = p.OverallTotal;
+                    DupeDone = p.OverallDone;
+                    UpdateDupeEta();
+                }
                 DupeCurrent = p.Current ?? "";
             });
 
@@ -561,10 +586,33 @@ public partial class MainViewModel : ObservableObject
         }
         finally
         {
+            _dupeStopwatch.Stop();
             IsDupeBuilding = false;
             ExitBusy();
         }
     }
+
+    private void UpdateDupeEta()
+    {
+        if (DupeTotal <= 0 || DupeDone <= 0 || _dupeStopwatch.Elapsed < TimeSpan.FromSeconds(2))
+        {
+            DupeEta = "Estimating remaining time...";
+            return;
+        }
+
+        if (DupeDone >= DupeTotal)
+        {
+            DupeEta = $"Completed in {FormatDuration(_dupeStopwatch.Elapsed)}";
+            return;
+        }
+
+        var remaining = TimeSpan.FromTicks(_dupeStopwatch.Elapsed.Ticks * (DupeTotal - DupeDone) / DupeDone);
+        DupeEta = $"Approx. {FormatDuration(remaining)} remaining ({FormatDuration(_dupeStopwatch.Elapsed)} elapsed)";
+    }
+
+    private static string FormatDuration(TimeSpan duration) => duration.TotalHours >= 1
+        ? $"{(int)duration.TotalHours}:{duration.Minutes:D2}:{duration.Seconds:D2}"
+        : $"{duration.Minutes}:{duration.Seconds:D2}";
     [RelayCommand]
     public void CancelDupeBuild()
     {
@@ -756,7 +804,7 @@ public partial class MainViewModel : ObservableObject
         if (m.DurationSec is null || m.DurationSec <= 1.0) return;
         if (string.IsNullOrWhiteSpace(m.Path) || !File.Exists(m.Path)) return;
 
-        await Dispatcher.UIThread.InvokeAsync(() => m.ThumbsLoading = true);
+        m.ThumbsLoading = true;
 
         try
         {
@@ -768,7 +816,7 @@ public partial class MainViewModel : ObservableObject
 
                 if (_thumbCache.TryGetValue(key, out var cached))
                 {
-                    await Dispatcher.UIThread.InvokeAsync(() => SetThumb(m, pos, cached));
+                    SetThumb(m, pos, cached);
                     continue;
                 }
 
@@ -785,7 +833,7 @@ public partial class MainViewModel : ObservableObject
                 byte[] png;
                 try
                 {
-                    png = await _extractor.ExtractFramePngAsync(m.Path, ts, ct);
+                    png = await _extractor.ExtractFramePngAsync(m.Path, ts, ct, ThumbWidth);
                 }
                 catch (Exception ex) when (MediaErrors.IsRecoverable(ex))
                 {
@@ -793,24 +841,56 @@ public partial class MainViewModel : ObservableObject
                     continue;
                 }
 
-                Bitmap bmp;
-                await using (var ms = new MemoryStream(png))
-                    bmp = new Bitmap(ms);
-
-                if (_thumbCache.Count >= 300)
+                // Decode scaled down: a full 4K frame would cost ~33 MB per cached thumbnail.
+                var bmp = await Task.Run(() =>
                 {
-                    var oldest = _thumbCache.First();
-                    oldest.Value.Dispose();
-                    _thumbCache.Remove(oldest.Key);
-                }
-                _thumbCache[key] = bmp;
+                    using var ms = new MemoryStream(png);
+                    return Bitmap.DecodeToWidth(ms, ThumbWidth);
+                }, ct);
 
-                await Dispatcher.UIThread.InvokeAsync(() => SetThumb(m, pos, bmp));
+                // A concurrent load for the same member may have filled the slot meanwhile.
+                if (!_thumbCache.TryAdd(key, bmp))
+                {
+                    bmp.Dispose();
+                    bmp = _thumbCache[key];
+                }
+                else
+                {
+                    _thumbOrder.Enqueue(key);
+                    EvictThumbnails();
+                }
+
+                // The group may have been deselected while decoding; it must not hold bitmaps.
+                ct.ThrowIfCancellationRequested();
+                SetThumb(m, pos, bmp);
             }
         }
         finally
         {
-            await Dispatcher.UIThread.InvokeAsync(() => m.ThumbsLoading = false);
+            m.ThumbsLoading = false;
+        }
+    }
+
+    private void EvictThumbnails()
+    {
+        var shown = SelectedGroup?.Members
+            .SelectMany(member => new[] { member.Thumb20, member.Thumb50, member.Thumb80 })
+            .OfType<Bitmap>()
+            .ToHashSet() ?? [];
+
+        // Oldest first; bitmaps on screen are re-queued instead of disposed.
+        for (var checkedCount = _thumbOrder.Count; _thumbCache.Count > ThumbCacheLimit && checkedCount > 0; checkedCount--)
+        {
+            var key = _thumbOrder.Dequeue();
+            if (!_thumbCache.TryGetValue(key, out var bitmap))
+                continue;
+            if (shown.Contains(bitmap))
+            {
+                _thumbOrder.Enqueue(key);
+                continue;
+            }
+            _thumbCache.Remove(key);
+            bitmap.Dispose();
         }
     }
 
@@ -922,9 +1002,10 @@ public partial class MainViewModel : ObservableObject
             var mover = new VideoDedupe.Infrastructure.FileMover(QuarantineRoot);
             var newPath = mover.MoveToQuarantine(m.Path);
 
-            await db.UpsertDecisionAsync(m.MediaId, "quarantine", note: $"moved to: {newPath}");
+            await db.MarkMediaFileQuarantinedAsync(m.MediaId, newPath);
 
-            m.Decision = "quarantine";
+            // Refresh every group: the same file can occur in more than one group.
+            await LoadGroupsAsync();
             Status = $"Moved to quarantine: {newPath}";
         }
         catch (Exception ex)
