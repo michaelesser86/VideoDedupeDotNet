@@ -1,647 +1,531 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:VideoDedupe.App.ViewModels"
+        xmlns:l="clr-namespace:VideoDedupe.App.Services"
         x:Class="VideoDedupe.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         Width="1440"
-        Height="880"
-        MinWidth="960"
-        MinHeight="720"
+        Height="900"
+        MinWidth="1000"
+        MinHeight="640"
         Title="VideoDedupe">
 
   <Window.DataContext>
     <vm:MainViewModel/>
   </Window.DataContext>
+
+  <Window.KeyBindings>
+    <KeyBinding Gesture="F5" Command="{Binding Groups.LoadGroupsCommand}"/>
+  </Window.KeyBindings>
+
   <Window.Resources>
-    <!-- ===== Accent palette (Purple) ===== -->
-    <Color x:Key="AccentColor">#8B5CF6</Color>
-    <!-- violet -->
-    <Color x:Key="AccentColor2">#6366F1</Color>
-    <!-- indigo -->
-    <Color x:Key="AccentGlow">#A78BFA</Color>
-
-    <!-- ===== Surfaces (Dark) ===== -->
-    <SolidColorBrush x:Key="BgBrush" Color="#0B0B12"/>
-    <SolidColorBrush x:Key="SurfaceBrush" Color="#121225"/>
-    <SolidColorBrush x:Key="Surface2Brush" Color="#17173A"/>
-    <SolidColorBrush x:Key="StrokeBrush" Color="#2B2B55"/>
-
-    <SolidColorBrush x:Key="AccentBrush" Color="{DynamicResource AccentColor}"/>
-    <SolidColorBrush x:Key="AccentBrush2" Color="{DynamicResource AccentColor2}"/>
-
-    <SolidColorBrush x:Key="TextBrush" Color="#F2F2FF"/>
-    <SolidColorBrush x:Key="TextDimBrush" Color="#B9B9D6"/>
+    <!-- Drop-down options show their label in the current language. -->
+    <DataTemplate x:Key="ChoiceTemplate" x:DataType="vm:Choice">
+      <TextBlock Text="{Binding Label}"/>
+    </DataTemplate>
   </Window.Resources>
 
   <Window.Styles>
-    <!-- Window background -->
-    <Style Selector="Window">
-      <Setter Property="Background" Value="{DynamicResource BgBrush}"/>
-    </Style>
-
-    <!-- Default text -->
-    <Style Selector="TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-    </Style>
-
-    <!-- Panels -->
-    <Style Selector="Border">
-      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-    </Style>
-
-    <!-- Buttons (accent) -->
-    <Style Selector="Button">
-      <Setter Property="CornerRadius" Value="10"/>
-      <Setter Property="Padding" Value="12,8"/>
-      <Setter Property="Foreground" Value="White"/>
-      <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
-    </Style>
-
-    <!-- Secondary buttons (optional): add class 'secondary' -->
-    <Style Selector="Button.secondary">
-      <Setter Property="Background" Value="{DynamicResource Surface2Brush}"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-    </Style>
-
-    <!-- TextBox styling -->
-    <Style Selector="TextBox">
-      <Setter Property="CornerRadius" Value="10"/>
-      <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-      <Setter Property="Padding" Value="10,8"/>
-    </Style>
-
-    <!-- ComboBox / ListBox basic surfaces -->
-    <Style Selector="ComboBox">
-      <Setter Property="CornerRadius" Value="10"/>
-      <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-    </Style>
-
-    <Style Selector="ListBox">
-      <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}"/>
-      <Setter Property="BorderThickness" Value="1"/>
+    <Style Selector="TabItem">
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="MinHeight" Value="40"/>
+      <Setter Property="Padding" Value="10,0"/>
     </Style>
   </Window.Styles>
 
-  <Grid RowDefinitions="Auto,*"
-        Margin="14"
-        RowSpacing="12">
+  <Panel>
+  <!-- Thin color-scheme gradient along the top edge -->
+  <Border Height="3" VerticalAlignment="Top" BorderThickness="0"
+          Background="{DynamicResource HighlightGradientBrush}"/>
 
-    <!-- ===================== TOP BAR ===================== -->
-    <Border Grid.Row="0" CornerRadius="12" Padding="12" Background="{DynamicResource SurfaceBrush}">
-      <!-- Keep the progress/status column stable while long file names update. -->
-      <Grid ColumnDefinitions="*,500"
-            ColumnSpacing="14">
+  <Grid RowDefinitions="Auto,Auto,*" Margin="16" RowSpacing="12">
 
-        <!-- Left: DB + Actions -->
-        <StackPanel Grid.Column="0" Spacing="10">
+    <!-- ===================== HEADER ===================== -->
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="24">
+      <StackPanel VerticalAlignment="Center" Spacing="2">
+        <TextBlock Classes="h1" FontWeight="Bold" Text="VideoDedupe"
+                   Foreground="{DynamicResource HighlightGradientBrush}"/>
+        <TextBlock Classes="caption" Text="{l:T 'Find and clean up duplicate videos'}"/>
+      </StackPanel>
 
-          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-            <TextBlock VerticalAlignment="Center"
-                       FontWeight="SemiBold"
-                       Text="Database"/>
-            <TextBox Grid.Column="1"
-                     Text="{Binding State.DbPath}"/>
-            <Button Grid.Column="2"
-                    Content="Pick DB…"
-                    Command="{Binding PickDbCommand}"
-                    IsEnabled="{Binding !State.IsBusy}"/>
-          </Grid>
+      <!-- Status: one line, full text on hover -->
+      <TextBlock Grid.Column="1"
+                 VerticalAlignment="Center"
+                 HorizontalAlignment="Right"
+                 Classes="dim"
+                 TextTrimming="CharacterEllipsis"
+                 MaxLines="2"
+                 TextWrapping="Wrap"
+                 Text="{Binding State.Status}"
+                 ToolTip.Tip="{Binding State.Status}"/>
 
-          <WrapPanel ItemSpacing="10" LineSpacing="8">
-            <Button Content="Load Roots"
-                    Command="{Binding Library.LoadRootsCommand}"
-                    IsEnabled="{Binding !State.IsBusy}"/>
-            <Button Content="Load Groups"
-                    Command="{Binding Groups.LoadGroupsCommand}"
-                    IsEnabled="{Binding !State.IsBusy}"/>
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+        <Button Content="{l:T 'Scan library'}"
+                ToolTip.Tip="{l:T 'Read new and changed videos in the enabled folders (step 1).'}"
+                Command="{Binding Library.RunScanIndexCommand}"
+                IsEnabled="{Binding !State.IsBusy}"/>
+        <Button Classes="accent"
+                Content="{l:T 'Find duplicates'}"
+                ToolTip.Tip="{l:T 'Compare the scanned videos and group the copies (step 2).'}"
+                Command="{Binding Build.RunCommand}"
+                IsEnabled="{Binding !State.IsBusy}"/>
+      </StackPanel>
+    </Grid>
 
-            <Separator Width="10"/>
-
-            <Button Content="Scan Index"
-                    Command="{Binding Library.RunScanIndexCommand}"
-                    IsEnabled="{Binding !State.IsBusy}"/>
-            <Button Content="Cancel Index"
-                    Command="{Binding Library.CancelScanIndexCommand}"
-                    IsVisible="{Binding Library.IsIndexing}"/>
-
-            <Separator Width="10"/>
-
-            <Button Content="Dupe Build"
-                    Command="{Binding Build.RunCommand}"
-                    IsEnabled="{Binding !State.IsBusy}"/>
-            <Button Content="Cancel Build"
-                    Command="{Binding Build.CancelCommand}"
-                    IsVisible="{Binding Build.IsBuilding}"/>
-          </WrapPanel>
-
-        </StackPanel>
-
-        <!-- Right: Progress + Status -->
-        <StackPanel Grid.Column="1" Spacing="10">
-
-          <!-- Index progress -->
-          <Border CornerRadius="10" Padding="10" IsVisible="{Binding Library.IsIndexing}">
-            <StackPanel Spacing="6">
-              <TextBlock FontWeight="SemiBold" Text="Indexing"/>
-              <ProgressBar Minimum="0" Maximum="1" Height="10" Value="{Binding Library.IndexPercent}"/>
-              <TextBlock Opacity="0.85">
-                <TextBlock.Text>
-                  <MultiBinding StringFormat="{}{0}/{1}  ok={2} fail={3}">
-                    <Binding Path="Library.IndexProcessed"/>
-                    <Binding Path="Library.IndexDiscovered"/>
-                    <Binding Path="Library.IndexOk"/>
-                    <Binding Path="Library.IndexFail"/>
-                  </MultiBinding>
-                </TextBlock.Text>
-              </TextBlock>
-              <TextBlock Opacity="0.75"
-                         TextTrimming="CharacterEllipsis"
-                         Text="{Binding Library.IndexCurrent}"/>
-            </StackPanel>
-          </Border>
-
-          <!-- Dupe progress -->
-          <Border CornerRadius="10" Padding="10" IsVisible="{Binding Build.IsBuilding}">
-            <StackPanel Spacing="6">
-              <TextBlock FontWeight="SemiBold" Text="Dupe Build"/>
-              <ProgressBar Minimum="0" Maximum="1" Height="10" Value="{Binding Build.Percent}"/>
-              <TextBlock Opacity="0.85">
-                <TextBlock.Text>
-                  <MultiBinding StringFormat="{}{0} - overall: {1}/{2}">
-                    <Binding Path="Build.Phase"/>
-                    <Binding Path="Build.Done"/>
-                    <Binding Path="Build.Total"/>
-                  </MultiBinding>
-                </TextBlock.Text>
-              </TextBlock>
-              <TextBlock Opacity="0.85" Text="{Binding Build.Eta}"/>
-              <TextBlock Opacity="0.75"
-                         TextTrimming="CharacterEllipsis"
-                         Text="{Binding Build.Current}"/>
-            </StackPanel>
-          </Border>
-
-          <!-- Status -->
-          <Border CornerRadius="10" Padding="10">
-            <StackPanel Spacing="6">
-              <Grid ColumnDefinitions="*,Auto">
-                <TextBlock FontWeight="SemiBold" Text="Status"/>
-                <Button Grid.Column="1"
-                        Classes="secondary"
-                        Padding="8,2"
-                        Content="Cancel clean-up"
-                        Command="{Binding Groups.CancelCleanUpCommand}"
-                        IsVisible="{Binding Groups.IsCleaning}"/>
-              </Grid>
-              <TextBlock TextWrapping="Wrap"
-                         Opacity="0.85"
-                         Text="{Binding State.Status}"/>
-            </StackPanel>
-          </Border>
-
-        </StackPanel>
-
-      </Grid>
-    </Border>
-
-    <!-- ===================== MAIN CONTENT ===================== -->
-    <Grid Grid.Row="1"
-          ColumnDefinitions="*,8,2*"
-          ColumnSpacing="12">
-
-      <!--  LEFT PANE -->
-      <Border Grid.Column="0" CornerRadius="12" Padding="12" Background="{DynamicResource SurfaceBrush}">
-        <Grid RowDefinitions="Auto,*"
-              RowSpacing="10">
-
-          <TextBlock Grid.Row="0"
-                     FontSize="18"
-                     FontWeight="SemiBold"
-                     Text="Workspace"/>
-
-          <TabControl Grid.Row="1">
-
-            <!-- ========== ROOTS TAB ========== -->
-            <TabItem Header="Roots">
-              <Grid RowDefinitions="Auto,Auto,*"
-                    RowSpacing="10"
-                    Margin="2">
-
-                <WrapPanel Grid.Row="0" ItemSpacing="10" LineSpacing="8">
-                  <Button Content="Add Root…"
-                          Command="{Binding Library.AddRootCommand}"
-                          IsEnabled="{Binding !State.IsBusy}"/>
-                  <Button Content="Remove Selected"
-                          Command="{Binding Library.RemoveSelectedRootCommand}"
-                          IsEnabled="{Binding Library.SelectedRoot, Converter={x:Static ObjectConverters.IsNotNull}}"/>
-                  <Button Content="Save Enabled"
-                          Command="{Binding Library.SaveRootEnabledCommand}"
-                          IsEnabled="{Binding !State.IsBusy}"/>
-                  <Button Content="Save Options"
-                          Command="{Binding Library.SaveRootOptionsCommand}"
-                          IsEnabled="{Binding Library.SelectedRoot, Converter={x:Static ObjectConverters.IsNotNull}}"/>
-                </WrapPanel>
-
-                <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                  <TextBox Grid.Column="0"
-                           PlaceholderText="Paste folder path (e.g. D:\Videos)"
-                           Text="{Binding Library.NewRootPath}"/>
-                  <Button Grid.Column="1"
-                          Content="Add Path"
-                          Command="{Binding Library.AddRootFromTextCommand}"
-                          IsEnabled="{Binding !State.IsBusy}"/>
-                </Grid>
-
-                <Grid Grid.Row="2"
-                      ColumnDefinitions="*,*"
-                      ColumnSpacing="12">
-
-                  <Border Grid.Column="0" CornerRadius="10" Padding="10" Background="{DynamicResource Surface2Brush}">
-                    <Grid RowDefinitions="Auto,*" RowSpacing="8">
-                      <TextBlock Grid.Row="0" FontWeight="SemiBold" Text="Roots"/>
-                      <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                        <ListBox ItemsSource="{Binding Library.Roots}"
-                                 SelectedItem="{Binding Library.SelectedRoot}">
-                          <ListBox.ItemTemplate>
-                            <DataTemplate x:DataType="vm:RootVm">
-                              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                <CheckBox Grid.Column="0"
-                                          VerticalAlignment="Center"
-                                          IsChecked="{Binding IsEnabled}"/>
-                                <TextBlock Grid.Column="1"
-                                           Text="{Binding Path}"
-                                           TextWrapping="Wrap"/>
-                              </Grid>
-                            </DataTemplate>
-                          </ListBox.ItemTemplate>
-                        </ListBox>
-                      </ScrollViewer>
-                    </Grid>
-                  </Border>
-
-                  <Border Grid.Column="1" CornerRadius="10" Padding="10">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                      <StackPanel Spacing="10">
-                        <TextBlock FontWeight="SemiBold" Text="Selected root"/>
-                        <TextBlock Opacity="0.85"
-                                   TextWrapping="Wrap"
-                                   Text="{Binding Library.SelectedRoot.Path}"/>
-
-                        <CheckBox Content="Include subfolders"
-                                  IsChecked="{Binding Library.SelectedRoot.IncludeSubdirs}"/>
-
-                        <TextBlock Opacity="0.75"
-                                   TextWrapping="Wrap"
-                                   Text="Exclude (MVP): semicolon separated tokens. Example: temp;cache;whatsapp"/>
-
-                        <TextBox TextWrapping="Wrap"
-                                 AcceptsReturn="True"
-                                 MinHeight="90"
-                                 Text="{Binding Library.SelectedRoot.ExcludeText}"/>
-                      </StackPanel>
-                    </ScrollViewer>
-                  </Border>
-
-                </Grid>
-              </Grid>
-            </TabItem>
-
-            <!-- ========== GROUPS TAB ========== -->
-            <TabItem Header="Groups">
-              <Grid RowDefinitions="Auto,Auto,Auto,*"
-                    RowSpacing="10"
-                    Margin="2">
-
-                <!-- Filter row -->
-                <Grid Grid.Row="0"
-                      ColumnDefinitions="*,Auto"
-                      ColumnSpacing="10">
-                  <TextBox Grid.Column="0"
-                           PlaceholderText="Filter groups by path contains…"
-                           Text="{Binding Groups.Filter}"/>
-                  <ComboBox Grid.Column="1"
-                            Width="190"
-                            ItemsSource="{Binding Groups.SortOptions}"
-                            SelectedItem="{Binding Groups.Sort}"/>
-                </Grid>
-
-                <!-- Summary + clean-up -->
-                <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                  <TextBlock VerticalAlignment="Center"
-                             Opacity="0.85"
-                             TextWrapping="Wrap"
-                             Text="{Binding Groups.Summary}"/>
-                  <Button Grid.Column="1"
-                          Content="Clean up all groups…"
-                          ToolTip.Tip="Keep the best copy of every group and move the others to the quarantine folder. Shows the full list first."
-                          Command="{Binding Groups.CleanUpAllCommand}"
-                          IsEnabled="{Binding !State.IsBusy}"/>
-                </Grid>
-
-                <!-- Options expander -->
-                <Expander Grid.Row="2"
-                          Header="Options"
-                          IsExpanded="False">
-                  <Border CornerRadius="10" Padding="10" Margin="0,8,0,0">
-                    <StackPanel Spacing="10">
-
-                      <CheckBox Content="Clear existing groups"
-                                IsChecked="{Binding Build.ClearExisting}"/>
-
-                      <CheckBox Content="Find mirrored copies"
-                                ToolTip.Tip="Also match videos that are flipped left to right."
-                                IsChecked="{Binding Build.MatchMirrored}"/>
-
-                      <CheckBox Content="Confirm close calls by the soundtrack"
-                                ToolTip.Tip="When the picture comparison is borderline and the scene check does not confirm it, compare two minutes of audio."
-                                IsChecked="{Binding Build.UseAudio}"/>
-
-                      <CheckBox Content="Find shortened copies (first run up to ~65 % slower)"
-                                ToolTip.Tip="Also match copies with a cut intro, credits or ads. Needs two more frames per video and checks every video, not only those of the same length. Only the first run pays for this; the frames are cached."
-                                IsChecked="{Binding Build.FindTrimmed}"/>
-
-                      <!-- Tol -->
-                      <Grid ColumnDefinitions="Auto,* ,Auto" ColumnSpacing="12">
-                        <TextBlock VerticalAlignment="Center" Text="Tolerance (sec)"/>
-                        <Slider Grid.Column="1"
-                                Minimum="0.05"
-                                Maximum="2.00"
-                                Value="{Binding Build.TolSec}"
-                                TickFrequency="0.05"
-                                IsSnapToTickEnabled="False"/>
-                        <TextBlock Grid.Column="2"
-                                   VerticalAlignment="Center"
-                                   Opacity="0.85"
-                                   Text="{Binding Build.TolSec, StringFormat={}{0:F2}}"/>
-                      </Grid>
-
-                      <!-- Min items -->
-                      <Grid ColumnDefinitions="Auto,* ,Auto" ColumnSpacing="12">
-                        <TextBlock VerticalAlignment="Center" Text="Min items"/>
-                        <Slider Grid.Column="1"
-                                Minimum="2"
-                                Maximum="10"
-                                Value="{Binding Build.MinItemsDouble}"
-                                TickFrequency="1"
-                                IsSnapToTickEnabled="True"/>
-                        <TextBlock Grid.Column="2"
-                                   VerticalAlignment="Center"
-                                   Opacity="0.85"
-                                   Text="{Binding Build.MinItems}"/>
-                      </Grid>
-
-                      <!-- MaxAvgDist -->
-                      <Grid ColumnDefinitions="Auto,* ,Auto" ColumnSpacing="12">
-                        <TextBlock VerticalAlignment="Center" Text="Max avg dist"/>
-                        <Slider Grid.Column="1"
-                                Minimum="2"
-                                Maximum="30"
-                                Value="{Binding Build.MaxAvgDist}"
-                                TickFrequency="1"
-                                IsSnapToTickEnabled="False"/>
-                        <TextBlock Grid.Column="2"
-                                   VerticalAlignment="Center"
-                                   Opacity="0.85"
-                                   Text="{Binding Build.MaxAvgDist, StringFormat={}{0:F0}}"/>
-                      </Grid>
-
-                      <!-- Frames -->
-                      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-                        <TextBlock VerticalAlignment="Center" Text="Frames (%)"/>
-                        <TextBox Grid.Column="1"
-                                 PlaceholderText="20,50,80"
-                                 Text="{Binding Build.FramesCsv}"/>
-                      </Grid>
-
-                      <TextBlock Opacity="0.65"
-                                 Text="Frames = comma separated percents (1..99). Example: 20,50,80"/>
-
-                      <!-- Quarantine -->
-                      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-                        <TextBlock VerticalAlignment="Center" Text="Quarantine folder"/>
-                        <TextBox Grid.Column="1"
-                                 Text="{Binding State.QuarantineRoot}"/>
-                        <Button Grid.Column="2"
-                                Classes="secondary"
-                                Content="Browse…"
-                                Command="{Binding PickQuarantineCommand}"/>
-                      </Grid>
-                    </StackPanel>
-                  </Border>
-                </Expander>
-
-                <!-- Groups list -->
-                <Border Grid.Row="3" CornerRadius="10" Padding="10" Background="{DynamicResource Surface2Brush}">
-                  <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                HorizontalScrollBarVisibility="Disabled">
-                    <ListBox ItemsSource="{Binding Groups.FilteredGroups}"
-                             SelectedItem="{Binding Groups.SelectedGroup}">
-                      <ListBox.ItemTemplate>
-                        <DataTemplate x:DataType="vm:GroupVm">
-                          <Border CornerRadius="10"
-                                  Padding="10"
-                                  Margin="0,0,0,8">
-                            <StackPanel Spacing="4">
-                              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                <TextBlock FontWeight="SemiBold"
-                                           Text="{Binding Title}"/>
-                                <TextBlock Grid.Column="1"
-                                           Opacity="0.85"
-                                           Text="{Binding ReclaimableText}"/>
-                              </Grid>
-                              <TextBlock Opacity="0.75"
-                                         TextTrimming="CharacterEllipsis"
-                                         Text="{Binding BestFileName, StringFormat=keep: {0}}"/>
-                            </StackPanel>
-                          </Border>
-                        </DataTemplate>
-                      </ListBox.ItemTemplate>
-                    </ListBox>
-                  </ScrollViewer>
-                </Border>
-
-              </Grid>
-            </TabItem>
-
-          </TabControl>
+    <!-- ===================== PROGRESS ===================== -->
+    <StackPanel Grid.Row="1" Spacing="8">
+      <Border Classes="card" Padding="12" IsVisible="{Binding Library.IsIndexing}">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+          <StackPanel Spacing="6">
+            <TextBlock FontWeight="SemiBold" Text="{Binding Library.ProgressText}"/>
+            <ProgressBar Minimum="0" Maximum="1" Value="{Binding Library.IndexPercent}"/>
+            <TextBlock Classes="caption" TextTrimming="CharacterEllipsis" Text="{Binding Library.IndexCurrent}"/>
+          </StackPanel>
+          <Button Grid.Column="1" VerticalAlignment="Center" Content="{l:T 'Cancel'}"
+                  Command="{Binding Library.CancelScanIndexCommand}"/>
         </Grid>
       </Border>
 
-      <!-- Splitter -->
-      <GridSplitter Grid.Column="1"
-                    Width="8"
-                    HorizontalAlignment="Stretch"
-                    VerticalAlignment="Stretch"/>
+      <Border Classes="card" Padding="12" IsVisible="{Binding Build.IsBuilding}">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+          <StackPanel Spacing="6">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock FontWeight="SemiBold" Text="{Binding Build.ProgressText}"/>
+              <TextBlock Grid.Column="1" Classes="dim" Text="{Binding Build.Eta}"/>
+            </Grid>
+            <ProgressBar Minimum="0" Maximum="1" Value="{Binding Build.Percent}"/>
+            <TextBlock Classes="caption" TextTrimming="CharacterEllipsis" Text="{Binding Build.Current}"/>
+          </StackPanel>
+          <Button Grid.Column="1" VerticalAlignment="Center" Content="{l:T 'Cancel'}"
+                  Command="{Binding Build.CancelCommand}"/>
+        </Grid>
+      </Border>
 
-      <!-- RIGHT PANE -->
-      <Border Grid.Column="2" CornerRadius="12" Padding="12" Background="{DynamicResource SurfaceBrush}">
-        <Grid RowDefinitions="Auto,*"
-              RowSpacing="10">
+      <Border Classes="card" Padding="12" IsVisible="{Binding Groups.IsCleaning}">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+          <TextBlock VerticalAlignment="Center" FontWeight="SemiBold"
+                     Text="{l:T 'Moving files to the quarantine folder… (see the status above)'}"/>
+          <Button Grid.Column="1" Content="{l:T 'Cancel'}" Command="{Binding Groups.CancelCleanUpCommand}"/>
+        </Grid>
+      </Border>
+    </StackPanel>
 
-          <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="10">
-            <StackPanel Spacing="6">
-              <TextBlock FontSize="18"
-                         FontWeight="SemiBold"
-                         Text="{Binding Groups.SelectedGroup.Title}"/>
-              <TextBlock Opacity="0.75"
-                         Text="Tip: Double-click a member to open. Right-click for menu."/>
-            </StackPanel>
-            <WrapPanel Grid.Column="1"
-                       ItemSpacing="10"
-                       VerticalAlignment="Top"
-                       IsVisible="{Binding Groups.SelectedGroup, Converter={x:Static ObjectConverters.IsNotNull}}">
-              <Button Content="Keep best, quarantine others"
-                      ToolTip.Tip="Moves every file except the BEST one (or the files marked as keep) to the quarantine folder. Asks first."
-                      Command="{Binding Groups.CleanUpGroupCommand}"
-                      CommandParameter="{Binding Groups.SelectedGroup}"
-                      IsEnabled="{Binding !State.IsBusy}"/>
-              <Button Classes="secondary"
-                      Content="Not duplicates"
-                      ToolTip.Tip="These files are different videos. Removes the group; later builds will not group them again."
-                      Command="{Binding Groups.GroupNotDuplicateCommand}"
-                      CommandParameter="{Binding Groups.SelectedGroup}"
-                      IsEnabled="{Binding !State.IsBusy}"/>
-            </WrapPanel>
-          </Grid>
+    <!-- ===================== MAIN ===================== -->
+    <Grid Grid.Row="2" ColumnDefinitions="400,8,*" MinHeight="0">
 
-          <Border Grid.Row="1" CornerRadius="10" Padding="10">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-              <ItemsControl ItemsSource="{Binding Groups.SelectedGroup.Members}">
+      <!-- ========== LEFT: tabs ========== -->
+      <Border Grid.Column="0" Classes="card" Padding="12,4,12,12">
+        <TabControl Padding="0,8,0,0">
+
+          <!-- Duplicates -->
+          <TabItem>
+            <TabItem.Header>
+              <TextBlock Text="{Binding Groups.TabTitle}"/>
+            </TabItem.Header>
+            <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBox x:Name="FilterBox"
+                         Classes="clearButton"
+                         PlaceholderText="{l:T 'Search (Ctrl+F)'}"
+                         ToolTip.Tip="{l:T 'Show only groups with a file or folder name containing this text'}"
+                         Text="{Binding Groups.Filter}"/>
+                <ComboBox Grid.Column="1"
+                          Width="170"
+                          ToolTip.Tip="{l:T 'Sort groups'}"
+                          ItemsSource="{Binding Groups.SortOptions}"
+                          SelectedItem="{Binding Groups.Sort}"
+                          ItemTemplate="{StaticResource ChoiceTemplate}"/>
+              </Grid>
+
+              <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBlock VerticalAlignment="Center" Classes="caption" TextWrapping="Wrap"
+                           Text="{Binding Groups.Summary}"/>
+                <Button Grid.Column="1"
+                        Content="{l:T 'Clean up all…'}"
+                        ToolTip.Tip="{l:T 'Keep the best copy of every group and move the others to the quarantine folder. Shows the full list first.'}"
+                        Command="{Binding Groups.CleanUpAllCommand}"
+                        IsEnabled="{Binding !State.IsBusy}"
+                        IsVisible="{Binding Groups.HasGroups}"/>
+              </Grid>
+
+              <!-- No ScrollViewer around the ListBox: its own one keeps the list virtualized. -->
+              <ListBox Grid.Row="2"
+                       Classes="groups"
+                       Background="Transparent"
+                       ItemsSource="{Binding Groups.FilteredGroups}"
+                       SelectedItem="{Binding Groups.SelectedGroup}"
+                       AutomationProperties.Name="{l:T 'Duplicate groups'}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:GroupVm">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                      <StackPanel Spacing="2">
+                        <TextBlock FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   Text="{Binding BestFileName}"
+                                   ToolTip.Tip="{Binding BestFileName}"/>
+                        <TextBlock Classes="caption" Text="{Binding CountText}"/>
+                      </StackPanel>
+                      <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
+                        <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Text="{Binding ReclaimableShort}"/>
+                        <TextBlock HorizontalAlignment="Right" Classes="caption" Text="{l:T 'to free'}"/>
+                      </StackPanel>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+
+              <StackPanel Grid.Row="2" Spacing="6" Margin="8,24" IsVisible="{Binding !Groups.HasVisibleGroups}">
+                <TextBlock Classes="h2" Text="{l:T 'No duplicates to show'}"/>
+                <TextBlock Classes="dim" TextWrapping="Wrap"
+                           Text="{l:T 'Add folders in the Folders tab, then click Scan library and Find duplicates. If you searched, clear the search box.'}"/>
+              </StackPanel>
+            </Grid>
+          </TabItem>
+
+          <!-- Folders -->
+          <TabItem>
+            <TabItem.Header>
+              <TextBlock Text="{Binding Library.TabTitle}"/>
+            </TabItem.Header>
+            <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="10">
+              <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                <Button Classes="accent" Content="{l:T 'Add folder…'}"
+                        Command="{Binding Library.AddRootCommand}"
+                        IsEnabled="{Binding !State.IsBusy}"/>
+                <TextBox Grid.Column="1"
+                         PlaceholderText="{l:T 'or paste a path'}"
+                         Text="{Binding Library.NewRootPath}"/>
+                <Button Grid.Column="2" Content="{l:T 'Add'}"
+                        Command="{Binding Library.AddRootFromTextCommand}"
+                        IsEnabled="{Binding !State.IsBusy}"/>
+              </Grid>
+
+              <TextBlock Grid.Row="1" Classes="caption" TextWrapping="Wrap"
+                         Text="{l:T 'Checked folders are scanned. Changes are saved automatically.'}"/>
+
+              <ListBox Grid.Row="2"
+                       Background="Transparent"
+                       ItemsSource="{Binding Library.Roots}"
+                       SelectedItem="{Binding Library.SelectedRoot}"
+                       AutomationProperties.Name="{l:T 'Library folders'}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:RootVm">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="4">
+                      <CheckBox VerticalAlignment="Center"
+                                IsChecked="{Binding IsEnabled}"
+                                ToolTip.Tip="{l:T 'Include this folder when scanning'}"
+                                AutomationProperties.Name="{Binding Path}"/>
+                      <TextBlock Grid.Column="1"
+                                 VerticalAlignment="Center"
+                                 TextTrimming="PathSegmentEllipsis"
+                                 Text="{Binding Path}"
+                                 ToolTip.Tip="{Binding Path}"/>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+
+              <StackPanel Grid.Row="2" Margin="8,24" Spacing="6" IsVisible="{Binding !Library.HasRoots}">
+                <TextBlock Classes="h2" Text="{l:T 'No folders yet'}"/>
+                <TextBlock Classes="dim" TextWrapping="Wrap" Text="{l:T 'Add the folders that contain your videos.'}"/>
+              </StackPanel>
+
+              <Border Grid.Row="3" Classes="card" Padding="12"
+                      Background="{DynamicResource SubtleFillBrush}"
+                      IsVisible="{Binding Library.SelectedRoot, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <StackPanel Spacing="8">
+                  <TextBlock FontWeight="SemiBold" TextTrimming="PathSegmentEllipsis"
+                             Text="{Binding Library.SelectedRoot.Path}"
+                             ToolTip.Tip="{Binding Library.SelectedRoot.Path}"/>
+                  <CheckBox Content="{l:T 'Include subfolders'}" IsChecked="{Binding Library.SelectedRoot.IncludeSubdirs}"/>
+                  <TextBox PlaceholderText="{l:T 'Skip paths containing… (e.g. temp;cache;whatsapp)'}"
+                           Text="{Binding Library.SelectedRoot.ExcludeText}"/>
+                  <Button Content="{l:T 'Remove folder'}"
+                          ToolTip.Tip="{l:T 'Stops scanning this folder. No files are deleted.'}"
+                          Command="{Binding Library.RemoveSelectedRootCommand}"/>
+                </StackPanel>
+              </Border>
+            </Grid>
+          </TabItem>
+
+          <!-- Settings -->
+          <TabItem Header="{l:T 'Settings'}">
+            <ScrollViewer>
+              <StackPanel Spacing="18" Margin="0,0,12,0">
+
+                <StackPanel Spacing="8">
+                  <TextBlock Classes="h2" Text="{l:T 'Appearance'}"/>
+                  <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+                    <TextBlock VerticalAlignment="Center" Text="{l:T 'Language'}"/>
+                    <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding LanguageOptions}"
+                              SelectedItem="{Binding SelectedLanguage}"
+                              ItemTemplate="{StaticResource ChoiceTemplate}"/>
+
+                    <TextBlock Grid.Row="1" VerticalAlignment="Center" Text="{l:T 'Mode'}"/>
+                    <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding ThemeOptions}"
+                              SelectedItem="{Binding SelectedTheme}"
+                              ItemTemplate="{StaticResource ChoiceTemplate}"/>
+
+                    <TextBlock Grid.Row="2" VerticalAlignment="Center" Text="{l:T 'Color scheme'}"/>
+                    <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding ColorSchemeOptions}"
+                              SelectedItem="{Binding SelectedColorScheme}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:Choice">
+                          <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Border Width="36" Height="14" CornerRadius="7" BorderThickness="0"
+                                    Background="{Binding Swatch}"/>
+                            <TextBlock VerticalAlignment="Center" Text="{Binding Label}"/>
+                          </StackPanel>
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                  </Grid>
+                </StackPanel>
+
+                <StackPanel Spacing="8">
+                  <TextBlock Classes="h2" Text="{l:T 'Files'}"/>
+                  <TextBlock Text="{l:T 'Database'}"/>
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBox IsReadOnly="True" Text="{Binding State.DbPath}" ToolTip.Tip="{Binding State.DbPath}"/>
+                    <Button Grid.Column="1" Content="{l:T 'Change…'}" Command="{Binding PickDbCommand}"
+                            IsEnabled="{Binding !State.IsBusy}"/>
+                  </Grid>
+                  <TextBlock Text="{l:T 'Quarantine folder'}"/>
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBox Text="{Binding State.QuarantineRoot}"/>
+                    <Button Grid.Column="1" Content="{l:T 'Browse…'}" Command="{Binding PickQuarantineCommand}"/>
+                  </Grid>
+                  <TextBlock Classes="caption" TextWrapping="Wrap"
+                             Text="{l:T 'Clean-up moves files here instead of deleting them, so you can still restore them.'}"/>
+                </StackPanel>
+
+                <StackPanel Spacing="10">
+                  <TextBlock Classes="h2" Text="{l:T 'Detection'}"/>
+                  <StackPanel Spacing="2">
+                    <CheckBox Content="{l:T 'Find mirrored copies'}" IsChecked="{Binding Build.MatchMirrored}"/>
+                    <TextBlock Classes="caption" Margin="28,0,0,0" TextWrapping="Wrap"
+                               Text="{l:T 'Also match videos flipped left to right. No extra time.'}"/>
+                  </StackPanel>
+                  <StackPanel Spacing="2">
+                    <CheckBox Content="{l:T 'Confirm close calls by the soundtrack'}" IsChecked="{Binding Build.UseAudio}"/>
+                    <TextBlock Classes="caption" Margin="28,0,0,0" TextWrapping="Wrap"
+                               Text="{l:T 'Compares two minutes of audio when the picture comparison is borderline.'}"/>
+                  </StackPanel>
+                  <StackPanel Spacing="2">
+                    <CheckBox Content="{l:T 'Find shortened copies'}" IsChecked="{Binding Build.FindTrimmed}"/>
+                    <TextBlock Classes="caption" Margin="28,0,0,0" TextWrapping="Wrap"
+                               Text="{l:T 'Copies with a cut intro, credits or ads. The first run takes up to ~65 % longer; later runs reuse the results.'}"/>
+                  </StackPanel>
+                  <StackPanel Spacing="2">
+                    <CheckBox Content="{l:T 'Replace previous results'}" IsChecked="{Binding Build.ClearExisting}"/>
+                    <TextBlock Classes="caption" Margin="28,0,0,0" TextWrapping="Wrap"
+                               Text="{l:T 'Off keeps the groups of earlier runs as well.'}"/>
+                  </StackPanel>
+
+                  <Grid ColumnDefinitions="140,*,48" ColumnSpacing="8">
+                    <TextBlock VerticalAlignment="Center" Text="{l:T 'Length tolerance'}"
+                               ToolTip.Tip="{l:T 'Videos whose lengths differ by more than this many seconds are never compared.'}"/>
+                    <Slider Grid.Column="1" Minimum="0.05" Maximum="2.00" TickFrequency="0.05"
+                            Value="{Binding Build.TolSec}"/>
+                    <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{Binding Build.TolSec, StringFormat={}{0:F2} s}"/>
+                  </Grid>
+                  <Grid ColumnDefinitions="140,*,48" ColumnSpacing="8">
+                    <TextBlock VerticalAlignment="Center" Text="{l:T 'Strictness'}"
+                               ToolTip.Tip="{l:T 'Maximum picture difference (0–64). Lower finds fewer, surer duplicates; default 10.'}"/>
+                    <Slider Grid.Column="1" Minimum="2" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True"
+                            Value="{Binding Build.MaxAvgDist}"/>
+                    <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{Binding Build.MaxAvgDist, StringFormat={}{0:F0}}"/>
+                  </Grid>
+                  <Grid ColumnDefinitions="140,*,48" ColumnSpacing="8">
+                    <TextBlock VerticalAlignment="Center" Text="{l:T 'Min. group size'}"/>
+                    <Slider Grid.Column="1" Minimum="2" Maximum="10" TickFrequency="1" IsSnapToTickEnabled="True"
+                            Value="{Binding Build.MinItemsDouble}"/>
+                    <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{Binding Build.MinItems}"/>
+                  </Grid>
+                  <Grid ColumnDefinitions="140,*" ColumnSpacing="8">
+                    <TextBlock VerticalAlignment="Center" Text="{l:T 'Compared frames'}"
+                               ToolTip.Tip="{l:T 'Positions in percent of the length, comma separated.'}"/>
+                    <TextBox Grid.Column="1" PlaceholderText="20,50,80" Text="{Binding Build.FramesCsv}"/>
+                  </Grid>
+                  <Button Content="{l:T 'Reset to defaults'}" Command="{Binding Build.ResetToDefaultsCommand}"/>
+                </StackPanel>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+        </TabControl>
+      </Border>
+
+      <GridSplitter Grid.Column="1" Background="Transparent" ResizeDirection="Columns"/>
+
+      <!-- ========== RIGHT: selected group ========== -->
+      <Border Grid.Column="2" Classes="card" Padding="16,14">
+        <Panel>
+          <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="6" MaxWidth="420"
+                      IsVisible="{Binding Groups.SelectedGroup, Converter={x:Static ObjectConverters.IsNull}}">
+            <TextBlock Classes="h2" HorizontalAlignment="Center" Text="{l:T 'Nothing selected'}"/>
+            <TextBlock Classes="dim" TextAlignment="Center" TextWrapping="Wrap"
+                       Text="{l:T 'Select a group on the left to compare its copies side by side.'}"/>
+          </StackPanel>
+
+          <Grid RowDefinitions="Auto,*" RowSpacing="12"
+                IsVisible="{Binding Groups.SelectedGroup, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+              <StackPanel Spacing="2">
+                <TextBlock Classes="h1" TextTrimming="CharacterEllipsis"
+                           Text="{Binding Groups.SelectedGroup.BestFileName}"
+                           ToolTip.Tip="{Binding Groups.SelectedGroup.BestFileName}"/>
+                <TextBlock Classes="dim">
+                  <TextBlock.Text>
+                    <MultiBinding StringFormat="{}{0} · {1}">
+                      <Binding Path="Groups.SelectedGroup.CountText"/>
+                      <Binding Path="Groups.SelectedGroup.ReclaimableText"/>
+                    </MultiBinding>
+                  </TextBlock.Text>
+                </TextBlock>
+              </StackPanel>
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                <Button Content="{l:T 'Not duplicates'}"
+                        ToolTip.Tip="{l:T 'These files are different videos. Removes the group; later runs will not group them again.'}"
+                        Command="{Binding Groups.GroupNotDuplicateCommand}"
+                        CommandParameter="{Binding Groups.SelectedGroup}"
+                        IsEnabled="{Binding !State.IsBusy}"/>
+                <Button Classes="accent"
+                        Content="{l:T 'Keep best, quarantine others'}"
+                        ToolTip.Tip="{l:T 'Moves every file except the best one (or the files marked as keep) to the quarantine folder. Asks first.'}"
+                        Command="{Binding Groups.CleanUpGroupCommand}"
+                        CommandParameter="{Binding Groups.SelectedGroup}"
+                        IsEnabled="{Binding !State.IsBusy}"/>
+              </StackPanel>
+            </Grid>
+
+            <ScrollViewer Grid.Row="1">
+              <ItemsControl ItemsSource="{Binding Groups.SelectedGroup.Members}" Margin="0,0,12,0">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:MemberVm">
-                    <Border CornerRadius="12"
-                            Padding="12"
-                            Margin="0,0,0,12"
+                    <Border Classes="member"
+                            Classes.best="{Binding IsBest}"
                             DoubleTapped="Member_DoubleTapped">
-
                       <Border.ContextMenu>
                         <ContextMenu>
-                          <MenuItem Header="Open"
-                                    Command="{Binding Owner.OpenFileCommand}"
-                                    CommandParameter="{Binding .}" />
-                          <MenuItem Header="Show in Explorer"
-                                    Command="{Binding Owner.ShowInExplorerCommand}"
-                                    CommandParameter="{Binding .}" />
-                          <MenuItem Header="Copy Path"
-                                    Command="{Binding Owner.CopyPathCommand}"
-                                    CommandParameter="{Binding .}" />
+                          <MenuItem Header="{l:T 'Open'}" InputGesture="Enter"
+                                    Command="{Binding Owner.OpenFileCommand}" CommandParameter="{Binding .}"/>
+                          <MenuItem Header="{l:T 'Show in Explorer'}"
+                                    Command="{Binding Owner.ShowInExplorerCommand}" CommandParameter="{Binding .}"/>
+                          <MenuItem Header="{l:T 'Copy path'}"
+                                    Command="{Binding Owner.CopyPathCommand}" CommandParameter="{Binding .}"/>
                           <Separator/>
-                          <MenuItem Header="Keep this file"
-                                    Command="{Binding Owner.MarkKeepCommand}"
-                                    CommandParameter="{Binding .}" />
-                          <MenuItem Header="Move to quarantine"
-                                    Command="{Binding Owner.QuarantineCommand}"
-                                    CommandParameter="{Binding .}" />
-                          <MenuItem Header="Not a duplicate"
-                                    Command="{Binding Owner.NotDuplicateCommand}"
-                                    CommandParameter="{Binding .}" />
+                          <MenuItem Header="{l:T 'Keep this file'}"
+                                    Command="{Binding Owner.MarkKeepCommand}" CommandParameter="{Binding .}"/>
+                          <MenuItem Header="{l:T 'Move to quarantine'}"
+                                    Command="{Binding Owner.QuarantineCommand}" CommandParameter="{Binding .}"/>
+                          <MenuItem Header="{l:T 'Not a duplicate'}"
+                                    Command="{Binding Owner.NotDuplicateCommand}" CommandParameter="{Binding .}"/>
                           <Separator/>
-                          <MenuItem Header="Delete"
-                                    Command="{Binding Owner.DeleteFileCommand}"
-                                    CommandParameter="{Binding .}" />
+                          <MenuItem Header="{l:T 'Delete…'}"
+                                    Command="{Binding Owner.DeleteFileCommand}" CommandParameter="{Binding .}"/>
                         </ContextMenu>
                       </Border.ContextMenu>
 
-                      <StackPanel Spacing="10">
-
-                        <StackPanel Spacing="2">
-                          <TextBlock FontWeight="SemiBold"
-                                     TextWrapping="Wrap"
-                                     Text="{Binding Path}" />
-                          <WrapPanel ItemSpacing="12">
-                            <TextBlock Text="{Binding BestText}"
-                                       FontWeight="Bold"
-                                       Foreground="{DynamicResource AccentBrush}"
-                                       IsVisible="{Binding IsBest}"/>
-                            <TextBlock Text="KEEP"
-                                       FontWeight="Bold"
-                                       Opacity="0.9"
-                                       IsVisible="{Binding IsKept}"/>
-                            <TextBlock Text="MISSING"
-                                       FontWeight="Bold"
-                                       Opacity="0.85"
-                                       IsVisible="{Binding IsMissing}"/>
-                          </WrapPanel>
-                          <TextBlock Opacity="0.85"
-                                     TextWrapping="Wrap"
-                                     Text="{Binding MatchText}"/>
-                        </StackPanel>
-
-                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                      VerticalScrollBarVisibility="Disabled">
-                          <StackPanel Orientation="Horizontal" Spacing="10">
-                            <Border Width="240" Height="135" CornerRadius="10">
-                              <Image Source="{Binding Thumb20}" Stretch="UniformToFill"/>
-                            </Border>
-                            <Border Width="240" Height="135" CornerRadius="10">
-                              <Image Source="{Binding Thumb50}" Stretch="UniformToFill"/>
-                            </Border>
-                            <Border Width="240" Height="135" CornerRadius="10">
-                              <Image Source="{Binding Thumb80}" Stretch="UniformToFill"/>
-                            </Border>
+                      <StackPanel Spacing="8">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                          <StackPanel Spacing="3">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                              <Border Classes="badge best" IsVisible="{Binding IsBest}">
+                                <TextBlock Text="{l:T 'BEST'}"/>
+                              </Border>
+                              <Border Classes="badge" IsVisible="{Binding IsKept}">
+                                <TextBlock Text="{l:T 'KEEP'}"/>
+                              </Border>
+                              <Border Classes="badge warn" IsVisible="{Binding IsMissing}">
+                                <TextBlock Text="{l:T 'MISSING'}"/>
+                              </Border>
+                              <TextBlock FontWeight="SemiBold" VerticalAlignment="Center"
+                                         TextTrimming="CharacterEllipsis"
+                                         Text="{Binding FileName}" ToolTip.Tip="{Binding Path}"/>
+                            </StackPanel>
+                            <TextBlock Classes="caption" TextTrimming="PathSegmentEllipsis"
+                                       Text="{Binding FolderPath}" ToolTip.Tip="{Binding FolderPath}"/>
                           </StackPanel>
-                        </ScrollViewer>
 
-                        <TextBlock Opacity="0.75"
-                                   Text="Loading thumbnails…"
-                                   IsVisible="{Binding ThumbsLoading}"/>
+                          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Top">
+                            <Button Content="{l:T 'Keep'}"
+                                    ToolTip.Tip="{l:T 'Always keep this file; clean-up will never move it.'}"
+                                    Command="{Binding Owner.MarkKeepCommand}" CommandParameter="{Binding .}"/>
+                            <Button Content="{l:T 'Quarantine'}"
+                                    ToolTip.Tip="{l:T 'Move this file to the quarantine folder.'}"
+                                    Command="{Binding Owner.QuarantineCommand}" CommandParameter="{Binding .}"/>
+                            <Button Content="{l:T 'Open'}"
+                                    Command="{Binding Owner.OpenFileCommand}" CommandParameter="{Binding .}"/>
+                            <Button Content="⋯" ToolTip.Tip="{l:T 'More actions'}" AutomationProperties.Name="{l:T 'More actions'}">
+                              <Button.Flyout>
+                                <MenuFlyout Placement="BottomEdgeAlignedRight">
+                                  <MenuItem Header="{l:T 'Show in Explorer'}"
+                                            Command="{Binding Owner.ShowInExplorerCommand}" CommandParameter="{Binding .}"/>
+                                  <MenuItem Header="{l:T 'Copy path'}"
+                                            Command="{Binding Owner.CopyPathCommand}" CommandParameter="{Binding .}"/>
+                                  <MenuItem Header="{l:T 'Not a duplicate'}"
+                                            Command="{Binding Owner.NotDuplicateCommand}" CommandParameter="{Binding .}"/>
+                                  <Separator/>
+                                  <MenuItem Header="{l:T 'Delete…'}"
+                                            Command="{Binding Owner.DeleteFileCommand}" CommandParameter="{Binding .}"/>
+                                </MenuFlyout>
+                              </Button.Flyout>
+                            </Button>
+                          </StackPanel>
+                        </Grid>
 
-                        <WrapPanel ItemSpacing="18" LineSpacing="6">
-                          <TextBlock Opacity="0.85" Text="{Binding ResolutionText}"/>
-                          <TextBlock Opacity="0.85" Text="{Binding DurationText}"/>
-                          <TextBlock Opacity="0.85" Text="{Binding SizeText}"/>
-                          <TextBlock Opacity="0.85" Text="{Binding BitrateText}"/>
-                          <TextBlock Opacity="0.85" Text="{Binding CodecText}"/>
-                          <TextBlock Opacity="0.85" Text="{Binding ModifiedText}"/>
-                        </WrapPanel>
+                        <TextBlock TextWrapping="Wrap">
+                          <Run Text="{Binding BestText}" FontWeight="SemiBold"
+                               Foreground="{DynamicResource AccentTextBrush}"/><Run Text="{Binding MatchText}" Foreground="{DynamicResource DimTextBrush}"/>
+                        </TextBlock>
 
-                        <WrapPanel ItemSpacing="10" LineSpacing="8">
-                          <Button Content="Open"
-                                  Command="{Binding Owner.OpenFileCommand}"
-                                  CommandParameter="{Binding .}"/>
-                          <Button Content="Explorer"
-                                  Classes="secondary"
-                                  Command="{Binding Owner.ShowInExplorerCommand}"
-                                  CommandParameter="{Binding .}"/>
-                          <Button Content="Keep"
-                                  Classes="secondary"
-                                  Command="{Binding Owner.MarkKeepCommand}"
-                                  CommandParameter="{Binding .}"/>
-                          <Button Content="Quarantine"
-                                  Classes="secondary"
-                                  Command="{Binding Owner.QuarantineCommand}"
-                                  CommandParameter="{Binding .}"/>
-                          <Button Content="Not a duplicate"
-                                  Classes="secondary"
-                                  Command="{Binding Owner.NotDuplicateCommand}"
-                                  CommandParameter="{Binding .}"/>
-                          <Button Content="Delete"
-                                  Classes="secondary"
-                                  Command="{Binding Owner.DeleteFileCommand}"
-                                  CommandParameter="{Binding .}"/>
-                        </WrapPanel>
+                        <!-- Three equal columns; each preview shrinks with its column on narrow windows. -->
+                        <UniformGrid Columns="3" MaxWidth="664" HorizontalAlignment="Left">
+                          <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="0,0,8,0">
+                            <Border Classes="thumb">
+                              <Image Source="{Binding Thumb20}" Stretch="UniformToFill"
+                                     AutomationProperties.Name="{l:T 'Preview frame'}"/>
+                            </Border>
+                          </Viewbox>
+                          <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="0,0,8,0">
+                            <Border Classes="thumb">
+                              <Image Source="{Binding Thumb50}" Stretch="UniformToFill"
+                                     AutomationProperties.Name="{l:T 'Preview frame'}"/>
+                            </Border>
+                          </Viewbox>
+                          <Viewbox Stretch="Uniform" StretchDirection="DownOnly" Margin="0,0,8,0">
+                            <Border Classes="thumb">
+                              <Image Source="{Binding Thumb80}" Stretch="UniformToFill"
+                                     AutomationProperties.Name="{l:T 'Preview frame'}"/>
+                            </Border>
+                          </Viewbox>
+                        </UniformGrid>
 
+                        <TextBlock Classes="caption">
+                          <TextBlock.Text>
+                            <MultiBinding StringFormat="{}{0} · {1} · {2} · {3} · {4} · {5}">
+                              <Binding Path="ResolutionText"/>
+                              <Binding Path="DurationText"/>
+                              <Binding Path="SizeText"/>
+                              <Binding Path="BitrateText"/>
+                              <Binding Path="CodecText"/>
+                              <Binding Path="ModifiedText"/>
+                            </MultiBinding>
+                          </TextBlock.Text>
+                        </TextBlock>
                       </StackPanel>
                     </Border>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
             </ScrollViewer>
-          </Border>
-
-        </Grid>
+          </Grid>
+        </Panel>
       </Border>
-
     </Grid>
   </Grid>
+  </Panel>
 </Window>

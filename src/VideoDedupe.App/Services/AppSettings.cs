@@ -23,6 +23,12 @@ public sealed class AppSettings
     public bool DupeMatchMirrored { get; set; } = Defaults.MatchMirrored;
     public bool DupeUseAudio { get; set; } = Defaults.UseAudio;
     public bool DupeFindTrimmed { get; set; } = Defaults.FindTrimmed;
+    /// <summary>"System", "Light" or "Dark".</summary>
+    public string Theme { get; set; } = "System";
+    /// <summary>"en" or "de"; empty follows the system language.</summary>
+    public string Language { get; set; } = "";
+    /// <summary>Id of a <see cref="ColorSchemes"/> entry.</summary>
+    public string ColorScheme { get; set; } = "violet";
 
     /// <summary>Missing or unreadable settings fall back to defaults instead of blocking startup.</summary>
     public static AppSettings Load(string path)

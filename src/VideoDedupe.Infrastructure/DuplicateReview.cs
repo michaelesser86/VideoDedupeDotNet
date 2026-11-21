@@ -7,7 +7,10 @@ public static class BestFileSelector
 {
     public const string KeepDecision = "keep";
 
-    public sealed record Choice(AppDb.MediaFileRow File, string Reason);
+    /// <summary>Why a file was chosen; lets the app word the reason in its own language.</summary>
+    public enum ReasonKind { MarkedKeep, OnlyFile, HighestResolution, LargestFile, Newest, SameQuality }
+
+    public sealed record Choice(AppDb.MediaFileRow File, string Reason, ReasonKind Kind);
 
     /// <summary>
     /// Files the user marked as keep win; otherwise the highest resolution, then the largest
@@ -21,21 +24,21 @@ public static class BestFileSelector
 
         var kept = files.Where(f => decisions?.GetValueOrDefault(f.Id) == KeepDecision).ToList();
         if (kept.Count > 0)
-            return new Choice(Rank(kept)[0], "marked as keep");
+            return new Choice(Rank(kept)[0], "marked as keep", ReasonKind.MarkedKeep);
 
         var ranked = Rank(files);
         var best = ranked[0];
         if (ranked.Count == 1)
-            return new Choice(best, "only file");
+            return new Choice(best, "only file", ReasonKind.OnlyFile);
 
         var next = ranked[1];
         if (Pixels(best) > Pixels(next))
-            return new Choice(best, $"highest resolution ({best.Width}×{best.Height})");
+            return new Choice(best, $"highest resolution ({best.Width}×{best.Height})", ReasonKind.HighestResolution);
         if (best.SizeBytes > next.SizeBytes)
-            return new Choice(best, "same resolution, largest file (most detail)");
+            return new Choice(best, "same resolution, largest file (most detail)", ReasonKind.LargestFile);
         if (Modified(best) > Modified(next))
-            return new Choice(best, "same resolution and size, newest");
-        return new Choice(best, "same quality as the others");
+            return new Choice(best, "same resolution and size, newest", ReasonKind.Newest);
+        return new Choice(best, "same quality as the others", ReasonKind.SameQuality);
     }
 
     private static List<AppDb.MediaFileRow> Rank(IEnumerable<AppDb.MediaFileRow> files) => files

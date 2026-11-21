@@ -1,10 +1,127 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="VideoDedupe.App.App"
-             RequestedThemeVariant="Dark">
+             RequestedThemeVariant="Default">
+  <!-- Default = follow the system's light or dark mode; Settings can override it. -->
+
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="AppBackgroundBrush" Color="#F4F4F8"/>
+          <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="CardStrokeBrush" Color="#E2E2EC"/>
+          <SolidColorBrush x:Key="SubtleFillBrush" Color="#ECECF3"/>
+          <SolidColorBrush x:Key="DimTextBrush" Color="#5C5C70"/>
+          <SolidColorBrush x:Key="AccentTextBrush" Color="#6D28D9"/>
+          <SolidColorBrush x:Key="BadgeBestBrush" Color="#EDE7FE"/>
+          <SolidColorBrush x:Key="BadgeWarnBrush" Color="#FDECEC"/>
+          <SolidColorBrush x:Key="WarnTextBrush" Color="#B42318"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="AppBackgroundBrush" Color="#0E0E16"/>
+          <SolidColorBrush x:Key="CardBrush" Color="#171724"/>
+          <SolidColorBrush x:Key="CardStrokeBrush" Color="#2A2A3E"/>
+          <SolidColorBrush x:Key="SubtleFillBrush" Color="#202032"/>
+          <SolidColorBrush x:Key="DimTextBrush" Color="#A6A6BE"/>
+          <SolidColorBrush x:Key="AccentTextBrush" Color="#C4B5FD"/>
+          <SolidColorBrush x:Key="BadgeBestBrush" Color="#33275A"/>
+          <SolidColorBrush x:Key="BadgeWarnBrush" Color="#4A1E22"/>
+          <SolidColorBrush x:Key="WarnTextBrush" Color="#FCA5A5"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
 
   <Application.Styles>
-    <FluentTheme />
-  </Application.Styles>
+    <!-- Accent and surface colors come from the selected color scheme (Services/ColorSchemes.cs);
+         the theme dictionaries above are only the defaults until it is applied. -->
+    <FluentTheme/>
 
+    <Style Selector="Window">
+      <Setter Property="Background" Value="{DynamicResource AppBackgroundBrush}"/>
+    </Style>
+
+    <!-- Surfaces -->
+    <Style Selector="Border.card">
+      <Setter Property="Background" Value="{DynamicResource CardBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="10"/>
+      <Setter Property="Padding" Value="16"/>
+    </Style>
+    <Style Selector="Border.member">
+      <Setter Property="Background" Value="{DynamicResource CardBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="CornerRadius" Value="10"/>
+      <Setter Property="Padding" Value="14"/>
+      <Setter Property="Margin" Value="0,0,0,10"/>
+    </Style>
+    <Style Selector="Border.member.best">
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemAccentColor}"/>
+    </Style>
+    <Style Selector="Border.thumb">
+      <Setter Property="Background" Value="{DynamicResource SubtleFillBrush}"/>
+      <Setter Property="CornerRadius" Value="6"/>
+      <Setter Property="ClipToBounds" Value="True"/>
+      <Setter Property="Width" Value="208"/>
+      <Setter Property="Height" Value="117"/>
+    </Style>
+
+    <!-- Small rounded labels: BEST, KEEP, MISSING -->
+    <Style Selector="Border.badge">
+      <Setter Property="CornerRadius" Value="4"/>
+      <Setter Property="Padding" Value="6,1"/>
+      <Setter Property="Background" Value="{DynamicResource SubtleFillBrush}"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Border.badge.best">
+      <Setter Property="Background" Value="{DynamicResource BadgeBestBrush}"/>
+    </Style>
+    <Style Selector="Border.badge.warn">
+      <Setter Property="Background" Value="{DynamicResource BadgeWarnBrush}"/>
+    </Style>
+    <Style Selector="Border.badge > TextBlock">
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style Selector="Border.badge.best > TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}"/>
+    </Style>
+    <Style Selector="Border.badge.warn > TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource WarnTextBrush}"/>
+    </Style>
+
+    <!-- Text roles -->
+    <Style Selector="TextBlock.h1">
+      <Setter Property="FontSize" Value="20"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style Selector="TextBlock.h2">
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style Selector="TextBlock.dim">
+      <Setter Property="Foreground" Value="{DynamicResource DimTextBrush}"/>
+    </Style>
+    <Style Selector="TextBlock.caption">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Foreground" Value="{DynamicResource DimTextBrush}"/>
+    </Style>
+
+    <Style Selector="Button">
+      <Setter Property="CornerRadius" Value="6"/>
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="CornerRadius" Value="6"/>
+    </Style>
+
+    <!-- Compact list rows for the group list -->
+    <Style Selector="ListBox.groups > ListBoxItem">
+      <Setter Property="Padding" Value="10,8"/>
+      <Setter Property="CornerRadius" Value="6"/>
+      <Setter Property="Margin" Value="0,0,0,2"/>
+    </Style>
+  </Application.Styles>
 </Application>

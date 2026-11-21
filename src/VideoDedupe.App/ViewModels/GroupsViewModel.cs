@@ -27,10 +27,13 @@ public partial class GroupsViewModel : ObservableObject
     public ObservableCollection<GroupVm> Groups { get; } = new();
     public ObservableCollection<GroupVm> FilteredGroups { get; } = new();
 
-    public IReadOnlyList<string> SortOptions { get; } = ["Most space to free", "Largest files", "Newest"];
+    public IReadOnlyList<Choice> SortOptions { get; } =
+        [new("space", "Most space to free"), new("size", "Largest files"), new("newest", "Newest")];
 
     [ObservableProperty] private string filter = "";
-    [ObservableProperty] private string sort = "Most space to free";
+    [ObservableProperty] private Choice sort;
+
+    public string TabTitle => Loc.F("Duplicates ({0})", Groups.Count);
     [ObservableProperty] private GroupVm? selectedGroup;
     [ObservableProperty] private bool isCleaning;
 
@@ -40,6 +43,15 @@ public partial class GroupsViewModel : ObservableObject
     {
         _state = state;
         _thumbnailPositions = thumbnailPositions;
+        sort = SortOptions[0];
+        Groups.CollectionChanged += (_, _) => OnPropertyChanged(nameof(TabTitle));
+        Loc.Instance.LanguageChanged += () =>
+        {
+            OnPropertyChanged(nameof(TabTitle));
+            UpdateSummary();
+            foreach (var group in Groups)
+                group.RefreshTexts();
+        };
         state.DatabaseChanged += () =>
         {
             _cleanupCts?.Cancel();
@@ -53,7 +65,7 @@ public partial class GroupsViewModel : ObservableObject
     }
 
     partial void OnFilterChanged(string value) => RefreshView();
-    partial void OnSortChanged(string value) => RefreshView();
+    partial void OnSortChanged(Choice value) => RefreshView();
 
     partial void OnSelectedGroupChanged(GroupVm? oldValue, GroupVm? newValue)
     {
@@ -81,13 +93,13 @@ public partial class GroupsViewModel : ObservableObject
         {
             if (delay)
                 await Task.Delay(200, ct);
-            using var _ = _state.Busy();
+            // Not a busy operation: previews must never block scanning or detection.
             await _thumbnails.LoadAsync(group, Path.GetFullPath(_state.DbPath), _thumbnailPositions(), ct);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            _state.Status = $"Thumbnails failed: {ex.Message}";
+            _state.Status = Loc.F("Thumbnails failed: {0}", ex.Message);
         }
     }
 
@@ -97,7 +109,7 @@ public partial class GroupsViewModel : ObservableObject
         try
         {
             using var _ = _state.Busy();
-            _state.Status = "Loading groups...";
+            _state.Status = Loc.T("Loading groups...");
             var db = await _state.OpenDbAsync();
             var groups = await db.ListDuplicateGroupsWithMembersAsync();
             var decisions = await db.GetDecisionsAsync(groups.SelectMany(g => g.Members).Select(m => m.File.Id));
@@ -114,20 +126,20 @@ public partial class GroupsViewModel : ObservableObject
                 Groups.Add(vm);
             }
             RefreshView(selectedId);
-            _state.Status = $"Loaded {Groups.Count} groups.";
+            _state.Status = Loc.F("Loaded {0} groups.", Groups.Count);
         }
         catch (Exception ex)
         {
-            _state.Status = $"Error: {ex.Message}";
+            _state.Status = Loc.F("Error: {0}", ex.Message);
         }
     }
 
     private void RefreshView(long? preferredGroupId = null)
     {
-        IEnumerable<GroupVm> q = Sort switch
+        IEnumerable<GroupVm> q = Sort.Id switch
         {
-            "Newest" => Groups.OrderByDescending(g => g.GroupId),
-            "Largest files" => Groups.OrderByDescending(g => g.Members.Sum(m => m.SizeBytes)),
+            "newest" => Groups.OrderByDescending(g => g.GroupId),
+            "size" => Groups.OrderByDescending(g => g.Members.Sum(m => m.SizeBytes)),
             _ => Groups.OrderByDescending(g => g.ReclaimableBytes)
         };
 
@@ -149,9 +161,14 @@ public partial class GroupsViewModel : ObservableObject
     {
         var bytes = Groups.Sum(g => g.ReclaimableBytes);
         Summary = Groups.Count == 0
-            ? "No duplicate groups loaded."
-            : $"{Groups.Count} groups · {Groups.Sum(g => g.Members.Count - 1)} extra copies · {GroupVm.FormatSize(bytes)} to free";
+            ? Loc.T("No duplicates found yet.")
+            : Loc.F("{0} groups · {1} extra copies · {2} to free", Groups.Count, Groups.Sum(g => g.Members.Count - 1), GroupVm.FormatSize(bytes));
+        HasGroups = Groups.Count > 0;
+        HasVisibleGroups = FilteredGroups.Count > 0;
     }
+
+    [ObservableProperty] private bool hasGroups;
+    [ObservableProperty] private bool hasVisibleGroups;
 
     // ----- member actions -----
 
@@ -161,13 +178,13 @@ public partial class GroupsViewModel : ObservableObject
         if (m is null) return;
         try
         {
-            if (!File.Exists(m.Path)) { _state.Status = "File not found."; return; }
+            if (!File.Exists(m.Path)) { _state.Status = Loc.T("File not found."); return; }
             DesktopShell.OpenFile(m.Path);
-            _state.Status = "Opened file.";
+            _state.Status = Loc.T("Opened file.");
         }
         catch (Exception ex)
         {
-            _state.Status = $"Open failed: {ex.Message}";
+            _state.Status = Loc.F("Open failed: {0}", ex.Message);
         }
     }
 
@@ -177,13 +194,13 @@ public partial class GroupsViewModel : ObservableObject
         if (m is null) return;
         try
         {
-            if (!File.Exists(m.Path)) { _state.Status = "File not found."; return; }
+            if (!File.Exists(m.Path)) { _state.Status = Loc.T("File not found."); return; }
             DesktopShell.ShowInExplorer(m.Path);
-            _state.Status = "Opened file location.";
+            _state.Status = Loc.T("Opened file location.");
         }
         catch (Exception ex)
         {
-            _state.Status = $"Explorer failed: {ex.Message}";
+            _state.Status = Loc.F("Explorer failed: {0}", ex.Message);
         }
     }
 
@@ -193,11 +210,11 @@ public partial class GroupsViewModel : ObservableObject
         if (m is null) return;
         try
         {
-            _state.Status = await DesktopShell.CopyTextAsync(m.Path) ? "Path copied to clipboard." : "Clipboard not available.";
+            _state.Status = await DesktopShell.CopyTextAsync(m.Path) ? Loc.T("Path copied to clipboard.") : Loc.T("Clipboard not available.");
         }
         catch (Exception ex)
         {
-            _state.Status = $"Copy failed: {ex.Message}";
+            _state.Status = Loc.F("Copy failed: {0}", ex.Message);
         }
     }
 
@@ -208,13 +225,13 @@ public partial class GroupsViewModel : ObservableObject
         try
         {
             var recycle = OperatingSystem.IsWindows();
-            if (File.Exists(m.Path) && !await DesktopShell.ConfirmAsync("Delete file",
+            if (File.Exists(m.Path) && !await DesktopShell.ConfirmAsync(Loc.T("Delete file"),
                     recycle
-                        ? $"Move this file to the Recycle Bin?\n\n{m.Path}"
-                        : $"Permanently delete this file? This cannot be undone.\n\n{m.Path}",
-                    recycle ? "Move to Recycle Bin" : "Delete permanently"))
+                        ? Loc.F("Move this file to the Recycle Bin?\n\n{0}", m.Path)
+                        : Loc.F("Permanently delete this file? This cannot be undone.\n\n{0}", m.Path),
+                    recycle ? Loc.T("Move to Recycle Bin") : Loc.T("Delete permanently")))
             {
-                _state.Status = "Delete canceled.";
+                _state.Status = Loc.T("Delete canceled.");
                 return;
             }
 
@@ -226,13 +243,13 @@ public partial class GroupsViewModel : ObservableObject
                 var db = await _state.OpenDbAsync();
                 await db.MarkMediaFileDeletedAsync(m.MediaId);
             }
-            _state.Status = "Deleted and marked in DB.";
+            _state.Status = Loc.F("Deleted: {0}", m.FileName);
             // Refresh every group: the same file can occur in more than one group.
             await LoadGroupsAsync();
         }
         catch (Exception ex)
         {
-            _state.Status = $"Delete failed: {ex.Message}";
+            _state.Status = Loc.F("Delete failed: {0}", ex.Message);
         }
     }
 
@@ -251,11 +268,11 @@ public partial class GroupsViewModel : ObservableObject
             foreach (var group in Groups.Where(g => g.Members.Any(x => x.MediaId == m.MediaId)))
                 group.UpdateBest();
             UpdateSummary();
-            _state.Status = $"Marked as keep: {m.FileName}";
+            _state.Status = Loc.F("Marked as keep: {0}", m.FileName);
         }
         catch (Exception ex)
         {
-            _state.Status = $"Error: {ex.Message}";
+            _state.Status = Loc.F("Error: {0}", ex.Message);
         }
     }
 
@@ -265,7 +282,7 @@ public partial class GroupsViewModel : ObservableObject
         if (m is null) return;
         try
         {
-            if (!File.Exists(m.Path)) { _state.Status = "File missing."; return; }
+            if (!File.Exists(m.Path)) { _state.Status = Loc.T("File missing."); return; }
             string newPath;
             using (_state.Busy())
             {
@@ -275,11 +292,11 @@ public partial class GroupsViewModel : ObservableObject
             }
             // Refresh every group: the same file can occur in more than one group.
             await LoadGroupsAsync();
-            _state.Status = $"Moved to quarantine: {newPath}";
+            _state.Status = Loc.F("Moved to quarantine: {0}", newPath);
         }
         catch (Exception ex)
         {
-            _state.Status = $"Error: {ex.Message}";
+            _state.Status = Loc.F("Error: {0}", ex.Message);
         }
     }
 
@@ -303,11 +320,11 @@ public partial class GroupsViewModel : ObservableObject
                 group.UpdateBest();
                 UpdateSummary();
             }
-            _state.Status = $"Marked as not a duplicate: {m.FileName}";
+            _state.Status = Loc.F("Marked as not a duplicate: {0}", m.FileName);
         }
         catch (Exception ex)
         {
-            _state.Status = $"Error: {ex.Message}";
+            _state.Status = Loc.F("Error: {0}", ex.Message);
         }
     }
 
@@ -322,11 +339,11 @@ public partial class GroupsViewModel : ObservableObject
             var db = await _state.OpenDbAsync();
             await db.MarkNotDuplicateAsync(group.Members.Select(m => m.MediaId));
             await RemoveGroupAsync(db, group);
-            _state.Status = $"Group #{group.GroupId} marked as not duplicates.";
+            _state.Status = Loc.F("Group #{0} marked as not duplicates.", group.GroupId);
         }
         catch (Exception ex)
         {
-            _state.Status = $"Error: {ex.Message}";
+            _state.Status = Loc.F("Error: {0}", ex.Message);
         }
     }
 
@@ -342,10 +359,10 @@ public partial class GroupsViewModel : ObservableObject
 
     [RelayCommand]
     public Task CleanUpGroupAsync(GroupVm? group) =>
-        group is null ? Task.CompletedTask : CleanUpAsync([group], $"group #{group.GroupId}");
+        group is null ? Task.CompletedTask : CleanUpAsync([group], Loc.F("group #{0}", group.GroupId));
 
     [RelayCommand]
-    public Task CleanUpAllAsync() => CleanUpAsync(Groups.ToList(), "all groups");
+    public Task CleanUpAllAsync() => CleanUpAsync(Groups.ToList(), Loc.T("all groups"));
 
     [RelayCommand]
     public void CancelCleanUp() => _cleanupCts?.Cancel();
@@ -361,26 +378,26 @@ public partial class GroupsViewModel : ObservableObject
             decisions, File.Exists);
         if (plan.Items.Count == 0)
         {
-            _state.Status = "Nothing to clean up.";
+            _state.Status = Loc.T("Nothing to clean up.");
             return;
         }
 
         var details = new StringBuilder();
         foreach (var group in plan.Items.GroupBy(i => i.GroupId))
         {
-            details.AppendLine($"#{group.Key}  keep  {group.First().KeptFile.Path}");
+            details.AppendLine($"#{group.Key}  {Loc.T("keep")}  {group.First().KeptFile.Path}");
             foreach (var item in group)
-                details.AppendLine($"      move  {item.File.Path}  ({GroupVm.FormatSize(item.File.SizeBytes)})");
+                details.AppendLine($"      {Loc.T("move")}  {item.File.Path}  ({GroupVm.FormatSize(item.File.SizeBytes)})");
         }
         var message =
-            $"Clean up {scope}: move {plan.Items.Count} files from {plan.GroupCount} groups to the quarantine folder " +
-            $"and free {GroupVm.FormatSize(plan.Bytes)}.\n\n" +
-            "Each group keeps its best copy, or the files you marked as keep. Nothing is deleted: " +
-            $"the files can be moved back from\n{_state.QuarantineRoot}";
-        if (!await DesktopShell.ConfirmAsync("Clean up duplicates", message, $"Move {plan.Items.Count} files",
+            Loc.F("Clean up {0}: move {1} files from {2} groups to the quarantine folder and free {3}.",
+                scope, plan.Items.Count, plan.GroupCount, GroupVm.FormatSize(plan.Bytes)) + "\n\n" +
+            Loc.F("Each group keeps its best copy, or the files you marked as keep. Nothing is deleted: the files can be moved back from\n{0}",
+                _state.QuarantineRoot);
+        if (!await DesktopShell.ConfirmAsync(Loc.T("Clean up duplicates"), message, Loc.F("Move {0} files", plan.Items.Count),
                 details.ToString().TrimEnd()))
         {
-            _state.Status = "Clean-up canceled.";
+            _state.Status = Loc.T("Clean-up canceled.");
             return;
         }
 
@@ -397,7 +414,7 @@ public partial class GroupsViewModel : ObservableObject
             foreach (var item in plan.Items)
             {
                 _cleanupCts.Token.ThrowIfCancellationRequested();
-                _state.Status = $"Moving {moved + failed.Count + 1}/{plan.Items.Count}: {item.File.Path}";
+                _state.Status = Loc.F("Moving {0}/{1}: {2}", moved + failed.Count + 1, plan.Items.Count, item.File.Path);
                 try
                 {
                     // Moving a big file across drives takes a while; keep the window responsive.
@@ -423,9 +440,11 @@ public partial class GroupsViewModel : ObservableObject
         }
 
         await LoadGroupsAsync();
-        var result = $"Moved {moved} of {plan.Items.Count} files to quarantine{(canceled ? " (canceled)" : "")}.";
+        var result = Loc.F(canceled
+            ? "Moved {0} of {1} files to quarantine (canceled)."
+            : "Moved {0} of {1} files to quarantine.", moved, plan.Items.Count);
         if (failed.Count > 0)
-            result += $" {failed.Count} failed: {string.Join(" | ", failed.Take(3))}";
+            result += Loc.F(" {0} failed: {1}", failed.Count, string.Join(" | ", failed.Take(3)));
         _state.Status = result;
     }
 }

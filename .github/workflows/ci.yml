@@ -10,9 +10,9 @@ jobs:
     # The app targets Windows (Recycle Bin, Explorer); tests run where it is developed.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
 
@@ -24,5 +24,7 @@ jobs:
 
       # Without ffmpeg on the runner the real-video extraction test passes vacuously;
       # everything else uses cached hashes or a deliberately missing executable.
+      # The GitHubActions logger turns every failed test into an annotation with its message,
+      # readable on the run page without downloading the log.
       - name: Test
-        run: dotnet test --no-build --configuration Release --verbosity normal
+        run: dotnet test --no-build --configuration Release --logger GitHubActions --logger "console;verbosity=normal"

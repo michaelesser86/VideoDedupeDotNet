@@ -34,13 +34,16 @@ public partial class DupeBuildViewModel : ObservableObject
     [ObservableProperty] private bool findTrimmed;
 
     [ObservableProperty] private bool isBuilding;
-    [ObservableProperty] private string phase = "";
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(Percent))] private int total;
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(Percent))] private int done;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(ProgressText))] private string phase = "";
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(Percent), nameof(ProgressText))] private int total;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(Percent), nameof(ProgressText))] private int done;
     [ObservableProperty] private string current = "";
-    [ObservableProperty] private string eta = "Estimating remaining time...";
+    [ObservableProperty] private string eta = "";
 
     public double Percent => Total <= 0 ? 0 : (double)Done / Total;
+
+    /// <summary>Phase names come from the service in English and are translated here.</summary>
+    public string ProgressText => Loc.F("Finding duplicates · {0} · {1} of {2} videos", Loc.T(Phase), Done, Total);
 
     /// <summary>Raised after a successful build, so the groups can be reloaded.</summary>
     public event Func<Task>? Finished;
@@ -57,6 +60,7 @@ public partial class DupeBuildViewModel : ObservableObject
         UseAudio = settings.DupeUseAudio;
         FindTrimmed = settings.DupeFindTrimmed;
         state.DatabaseChanged += () => _cts?.Cancel();
+        Loc.Instance.LanguageChanged += () => OnPropertyChanged(nameof(ProgressText));
     }
 
     public void SaveTo(AppSettings settings)
@@ -87,6 +91,20 @@ public partial class DupeBuildViewModel : ObservableObject
     public void Cancel() => _cts?.Cancel();
 
     [RelayCommand]
+    public void ResetToDefaults()
+    {
+        var defaults = new DupeBuildOptions();
+        ClearExisting = defaults.ClearExisting;
+        TolSec = defaults.TolSec;
+        MinItems = defaults.MinItems;
+        MaxAvgDist = defaults.MaxAvgDist;
+        FramesCsv = string.Join(",", DupeBuildOptions.DefaultFramePercents);
+        MatchMirrored = defaults.MatchMirrored;
+        UseAudio = defaults.UseAudio;
+        FindTrimmed = defaults.FindTrimmed;
+    }
+
+    [RelayCommand]
     public async Task RunAsync()
     {
         if (IsBuilding) return;
@@ -98,7 +116,7 @@ public partial class DupeBuildViewModel : ObservableObject
             Phase = "Starting...";
             Total = Done = 0;
             Current = "";
-            Eta = "Estimating remaining time...";
+            Eta = Loc.T("Estimating remaining time...");
             _stopwatch.Restart();
 
             _cts?.Cancel();
@@ -116,8 +134,7 @@ public partial class DupeBuildViewModel : ObservableObject
                 MatchMirrored: MatchMirrored,
                 UseAudio: UseAudio,
                 FindTrimmed: FindTrimmed);
-            _state.Status =
-                $"Dupe build with tol={opt.TolSec}, min={opt.MinItems}, maxDist={opt.MaxAvgDist}, frames=[{string.Join(",", opt.FramePercents!)}]";
+            _state.Status = Loc.T("Finding duplicates...");
 
             var progress = new Progress<DupeBuildProgress>(p =>
             {
@@ -132,16 +149,16 @@ public partial class DupeBuildViewModel : ObservableObject
             });
 
             var groups = await svc.RunAsync(opt, progress, _cts.Token);
-            _state.Status = $"Dupe build finished: {groups} groups.";
+            _state.Status = Loc.F("Search finished: {0} groups.", groups);
             succeeded = true;
         }
         catch (OperationCanceledException)
         {
-            _state.Status = "Dupe build canceled.";
+            _state.Status = Loc.T("Search canceled.");
         }
         catch (Exception ex)
         {
-            _state.Status = $"Dupe build error: {ex.Message}";
+            _state.Status = Loc.F("Search failed: {0}", ex.Message);
         }
         finally
         {
@@ -157,16 +174,16 @@ public partial class DupeBuildViewModel : ObservableObject
     {
         if (Total <= 0 || Done <= 0 || _stopwatch.Elapsed < TimeSpan.FromSeconds(2))
         {
-            Eta = "Estimating remaining time...";
+            Eta = Loc.T("Estimating remaining time...");
             return;
         }
         if (Done >= Total)
         {
-            Eta = $"Completed in {FormatDuration(_stopwatch.Elapsed)}";
+            Eta = Loc.F("Completed in {0}", FormatDuration(_stopwatch.Elapsed));
             return;
         }
         var remaining = TimeSpan.FromTicks(_stopwatch.Elapsed.Ticks * (Total - Done) / Done);
-        Eta = $"Approx. {FormatDuration(remaining)} remaining ({FormatDuration(_stopwatch.Elapsed)} elapsed)";
+        Eta = Loc.F("Approx. {0} remaining ({1} elapsed)", FormatDuration(remaining), FormatDuration(_stopwatch.Elapsed));
     }
 
     private static string FormatDuration(TimeSpan duration) => duration.TotalHours >= 1

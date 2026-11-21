@@ -18,7 +18,7 @@ public sealed class ConfirmDialog : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         var confirm = new Button { Content = confirmText, Classes = { "accent" } };
-        var cancel = new Button { Content = "Cancel", IsDefault = true, IsCancel = true };
+        var cancel = new Button { Content = Services.Loc.T("Cancel"), IsDefault = true, IsCancel = true };
         confirm.Click += (_, _) => Close(true);
         cancel.Click += (_, _) => Close(false);
 

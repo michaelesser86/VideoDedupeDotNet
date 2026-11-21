@@ -8,6 +8,7 @@ using Avalonia.Media.Imaging;
 
 using CommunityToolkit.Mvvm.ComponentModel;
 
+using VideoDedupe.App.Services;
 using VideoDedupe.Infrastructure;
 
 namespace VideoDedupe.App.ViewModels;
@@ -21,14 +22,16 @@ public partial class GroupVm : ObservableObject
 
     public ObservableCollection<MemberVm> Members { get; } = new();
 
-    [ObservableProperty] private string bestReason = "";
+    private BestFileSelector.Choice? _best;
 
-    public string Title => $"#{GroupId} · {Members.Count} files";
+    public string CountText => Loc.F("{0} files · #{1}", Members.Count, GroupId);
+
+    public string ReclaimableShort => FormatSize(ReclaimableBytes);
 
     /// <summary>Space freed by keeping only the best copy.</summary>
     public long ReclaimableBytes => Members.Where(m => !m.IsBest).Sum(m => m.SizeBytes);
 
-    public string ReclaimableText => $"saves {FormatSize(ReclaimableBytes)}";
+    public string ReclaimableText => Loc.F("saves {0}", FormatSize(ReclaimableBytes));
 
     public string BestFileName => Members.FirstOrDefault(m => m.IsBest)?.FileName ?? "";
 
@@ -40,20 +43,39 @@ public partial class GroupVm : ObservableObject
             m.IsBest = false;
             m.BestReason = "";
         }
+        _best = null;
         if (Members.Count > 0)
         {
             var decisions = Members.Where(m => m.Decision is not null).ToDictionary(m => m.MediaId, m => m.Decision!);
-            var choice = BestFileSelector.Choose(Members.Select(m => m.File).ToList(), decisions);
-            var best = Members.First(m => m.MediaId == choice.File.Id);
-            best.IsBest = true;
-            best.BestReason = choice.Reason;
-            BestReason = choice.Reason;
+            _best = BestFileSelector.Choose(Members.Select(m => m.File).ToList(), decisions);
+            Members.First(m => m.MediaId == _best.File.Id).IsBest = true;
         }
-        OnPropertyChanged(nameof(Title));
-        OnPropertyChanged(nameof(ReclaimableBytes));
-        OnPropertyChanged(nameof(ReclaimableText));
+        RefreshTexts();
         OnPropertyChanged(nameof(BestFileName));
     }
+
+    /// <summary>Re-words everything shown, e.g. after a language switch.</summary>
+    public void RefreshTexts()
+    {
+        if (_best is not null && Members.FirstOrDefault(m => m.MediaId == _best.File.Id) is { } best)
+            best.BestReason = ReasonText(_best);
+        foreach (var m in Members)
+            m.RefreshTexts();
+        OnPropertyChanged(nameof(CountText));
+        OnPropertyChanged(nameof(ReclaimableShort));
+        OnPropertyChanged(nameof(ReclaimableBytes));
+        OnPropertyChanged(nameof(ReclaimableText));
+    }
+
+    private static string ReasonText(BestFileSelector.Choice c) => c.Kind switch
+    {
+        BestFileSelector.ReasonKind.MarkedKeep => Loc.T("marked as keep"),
+        BestFileSelector.ReasonKind.OnlyFile => Loc.T("only file"),
+        BestFileSelector.ReasonKind.HighestResolution => Loc.F("highest resolution ({0}×{1})", c.File.Width, c.File.Height),
+        BestFileSelector.ReasonKind.LargestFile => Loc.T("same resolution, largest file (most detail)"),
+        BestFileSelector.ReasonKind.Newest => Loc.T("same resolution and size, newest"),
+        _ => Loc.T("same quality as the others")
+    };
 
     public static string FormatSize(long bytes) => bytes switch
     {
@@ -75,6 +97,7 @@ public partial class MemberVm : ObservableObject
     public long MediaId => File.Id;
     public string Path => File.Path;
     public string FileName => System.IO.Path.GetFileName(File.Path);
+    public string FolderPath => System.IO.Path.GetDirectoryName(File.Path) ?? "";
     public long SizeBytes => File.SizeBytes;
     public double? DurationSec => File.DurationSec;
     public bool IsMissing => string.IsNullOrWhiteSpace(File.Path) || !System.IO.File.Exists(File.Path);
@@ -96,7 +119,15 @@ public partial class MemberVm : ObservableObject
 
     public bool IsKept => Decision == BestFileSelector.KeepDecision;
 
-    public string BestText => IsBest ? $"BEST · {BestReason}" : "";
+    /// <summary>Lead-in of the explanation line for the copy to keep.</summary>
+    public string BestText => IsBest ? Loc.F("Best copy: {0}. ", BestReason) : "";
+
+    /// <summary>Notifies the texts computed in the current language.</summary>
+    public void RefreshTexts()
+    {
+        OnPropertyChanged(nameof(BestText));
+        OnPropertyChanged(nameof(MatchText));
+    }
 
     /// <summary>
     /// 100 % for identical frames, 0 % at 32 differing bits, which is what unrelated
@@ -110,22 +141,24 @@ public partial class MemberVm : ObservableObject
         get
         {
             if (Evidence.IsReference)
-                return "Reference: the other files were compared with this one";
-            var parts = new List<string> { $"Picture {PictureSimilarity:P0} similar" };
+                return Loc.T("Reference: the other files were compared with this one");
+            var parts = new List<string> { Loc.F("Picture {0:P0} similar", PictureSimilarity) };
             if (Evidence.Mirrored)
-                parts.Add("mirrored");
+                parts.Add(Loc.T("mirrored"));
             if (Evidence.TrimKind is { } kind && Evidence.TrimDiffSec is double diff)
             {
                 var length = TimeSpan.FromSeconds(Math.Abs(diff)).ToString(@"m\:ss", CultureInfo.InvariantCulture);
-                var where = kind == AppDb.TrimKinds.SameStart ? "at the end" : "at the start";
-                parts.Add(diff < 0 ? $"{length} shorter, cut {where}" : $"{length} longer, extra footage {where}");
+                var atEnd = kind == AppDb.TrimKinds.SameStart;
+                parts.Add(Loc.F(diff < 0
+                    ? atEnd ? "{0} shorter, cut at the end" : "{0} shorter, cut at the start"
+                    : atEnd ? "{0} longer, extra footage at the end" : "{0} longer, extra footage at the start", length));
             }
             else if (Evidence.AvgDist > Group.MaxAvgDist)
             {
                 // Audio is only compared when the scene check did not confirm the match.
                 parts.Add(Evidence.AudioBer is double ber
-                    ? $"confirmed by the soundtrack ({1 - ber:P0} match)"
-                    : "confirmed by comparing scenes");
+                    ? Loc.F("confirmed by the soundtrack ({0:P0} match)", 1 - ber)
+                    : Loc.T("confirmed by comparing scenes"));
             }
             return string.Join(" · ", parts);
         }
@@ -157,4 +190,11 @@ public partial class RootVm : ObservableObject
     [ObservableProperty] private bool isEnabled;
     [ObservableProperty] private bool includeSubdirs = true;
     [ObservableProperty] private string? excludeText;
+
+    /// <summary>Set after loading; every edit is saved right away, there is no save button.</summary>
+    public Action<RootVm>? Changed { get; set; }
+
+    partial void OnIsEnabledChanged(bool value) => Changed?.Invoke(this);
+    partial void OnIncludeSubdirsChanged(bool value) => Changed?.Invoke(this);
+    partial void OnExcludeTextChanged(string? value) => Changed?.Invoke(this);
 }

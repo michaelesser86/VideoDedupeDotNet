@@ -25,22 +25,34 @@ public partial class LibraryViewModel : ObservableObject
     [ObservableProperty] private string newRootPath = "";
 
     [ObservableProperty] private bool isIndexing;
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(IndexPercent))] private int indexDiscovered;
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(IndexPercent))] private int indexProcessed;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(IndexPercent), nameof(ProgressText))] private int indexDiscovered;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(IndexPercent), nameof(ProgressText))] private int indexProcessed;
     [ObservableProperty] private int indexOk;
-    [ObservableProperty] private int indexFail;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(ProgressText))] private int indexFail;
     [ObservableProperty] private string indexCurrent = "";
 
     public double IndexPercent => IndexDiscovered <= 0 ? 0 : (double)IndexProcessed / IndexDiscovered;
 
+    public string ProgressText => Loc.F("Scanning library · {0} of {1} videos · {2} unreadable",
+        IndexProcessed, IndexDiscovered, IndexFail);
+
+    public string TabTitle => Loc.F("Folders ({0})", Roots.Count);
+
     public LibraryViewModel(AppState state)
     {
         _state = state;
+        Roots.CollectionChanged += (_, _) => OnPropertyChanged(nameof(TabTitle));
+        Loc.Instance.LanguageChanged += () =>
+        {
+            OnPropertyChanged(nameof(TabTitle));
+            OnPropertyChanged(nameof(ProgressText));
+        };
         state.DatabaseChanged += () =>
         {
             _indexCts?.Cancel();
             Roots.Clear();
             SelectedRoot = null;
+            HasRoots = false;
         };
     }
 
@@ -49,8 +61,8 @@ public partial class LibraryViewModel : ObservableObject
     {
         try
         {
-            using var _ = _state.Busy();
-            _state.Status = "Loading roots...";
+            using var busy = _state.Busy();
+            _state.Status = Loc.T("Loading folders...");
             var db = await _state.OpenDbAsync();
             Roots.Clear();
             foreach (var r in await db.ListScanRootsAsync())
@@ -60,14 +72,17 @@ public partial class LibraryViewModel : ObservableObject
                     Path = r.Path,
                     IsEnabled = r.IsEnabled == 1,
                     IncludeSubdirs = r.IncludeSubdirs == 1,
-                    ExcludeText = r.ExcludeText
+                    ExcludeText = r.ExcludeText,
+                    // Set last: the values above are loaded, not edited.
+                    Changed = root => _ = SaveRootAsync(root)
                 });
             SelectedRoot = Roots.FirstOrDefault();
-            _state.Status = $"Loaded {Roots.Count} roots. DB={Path.GetFullPath(_state.DbPath)}";
+            HasRoots = Roots.Count > 0;
+            _state.Status = $"{Roots.Count} folders.";
         }
         catch (Exception ex)
         {
-            _state.Status = $"Error: {ex.Message}";
+            _state.Status = Loc.F("Error: {0}", ex.Message);
         }
     }
 
@@ -76,14 +91,14 @@ public partial class LibraryViewModel : ObservableObject
     {
         try
         {
-            var path = await DesktopShell.PickFolderAsync("Select folder to scan");
+            var path = await DesktopShell.PickFolderAsync(Loc.T("Select folder to scan"));
             if (string.IsNullOrWhiteSpace(path))
                 return;
             await AddAsync(path);
         }
         catch (Exception ex)
         {
-            _state.Status = $"Add root failed: {ex.Message}";
+            _state.Status = Loc.F("Adding the folder failed: {0}", ex.Message);
         }
     }
 
@@ -93,12 +108,12 @@ public partial class LibraryViewModel : ObservableObject
         var path = (NewRootPath ?? "").Trim().Trim('"');
         if (string.IsNullOrWhiteSpace(path))
         {
-            _state.Status = "Please enter a folder path.";
+            _state.Status = Loc.T("Please enter a folder path.");
             return;
         }
         if (!Directory.Exists(path))
         {
-            _state.Status = $"Folder does not exist: {path}";
+            _state.Status = Loc.F("Folder does not exist: {0}", path);
             return;
         }
         try
@@ -108,7 +123,7 @@ public partial class LibraryViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            _state.Status = $"Add root failed: {ex.Message}";
+            _state.Status = Loc.F("Adding the folder failed: {0}", ex.Message);
         }
     }
 
@@ -120,7 +135,7 @@ public partial class LibraryViewModel : ObservableObject
             await db.AddScanRootAsync(path);
         }
         await LoadRootsAsync();
-        _state.Status = $"Added root: {path}";
+        _state.Status = Loc.F("Added folder: {0}", path);
     }
 
     [RelayCommand]
@@ -135,45 +150,28 @@ public partial class LibraryViewModel : ObservableObject
                 await db.DeleteScanRootAsync(SelectedRoot.Id);
             }
             await LoadRootsAsync();
-            _state.Status = "Root removed.";
+            _state.Status = Loc.T("Folder removed from the library (files stay where they are).");
         }
         catch (Exception ex)
         {
-            _state.Status = $"Error: {ex.Message}";
+            _state.Status = Loc.F("Error: {0}", ex.Message);
         }
     }
 
-    [RelayCommand]
-    public async Task SaveRootEnabledAsync()
-    {
-        try
-        {
-            using var _ = _state.Busy();
-            var db = await _state.OpenDbAsync();
-            foreach (var r in Roots)
-                await db.SetScanRootEnabledAsync(r.Id, r.IsEnabled);
-            _state.Status = "Enabled flags saved.";
-        }
-        catch (Exception ex)
-        {
-            _state.Status = $"Error: {ex.Message}";
-        }
-    }
+    [ObservableProperty] private bool hasRoots;
 
-    [RelayCommand]
-    public async Task SaveRootOptionsAsync()
+    // Saved on every change, so nothing is lost when the user forgets a save button.
+    private async Task SaveRootAsync(RootVm root)
     {
-        if (SelectedRoot is null) return;
         try
         {
-            using var _ = _state.Busy();
             var db = await _state.OpenDbAsync();
-            await db.UpdateScanRootOptionsAsync(SelectedRoot.Id, SelectedRoot.IncludeSubdirs, SelectedRoot.ExcludeText);
-            _state.Status = "Root options saved.";
+            await db.SetScanRootEnabledAsync(root.Id, root.IsEnabled);
+            await db.UpdateScanRootOptionsAsync(root.Id, root.IncludeSubdirs, root.ExcludeText);
         }
         catch (Exception ex)
         {
-            _state.Status = $"Error: {ex.Message}";
+            _state.Status = Loc.F("Folder settings not saved: {0}", ex.Message);
         }
     }
 
@@ -190,7 +188,7 @@ public partial class LibraryViewModel : ObservableObject
             IsIndexing = true;
             IndexDiscovered = IndexProcessed = IndexOk = IndexFail = 0;
             IndexCurrent = "";
-            _state.Status = "Indexing...";
+            _state.Status = Loc.T("Scanning...");
 
             _indexCts?.Cancel();
             _indexCts?.Dispose();
@@ -208,15 +206,15 @@ public partial class LibraryViewModel : ObservableObject
             });
             await svc.RunAsync(progress, _indexCts.Token);
 
-            _state.Status = $"Index done. Files={IndexDiscovered}, ok={IndexOk}, fail={IndexFail}";
+            _state.Status = Loc.F("Scan finished: {0} videos, {1} could not be read.", IndexDiscovered, IndexFail);
         }
         catch (OperationCanceledException)
         {
-            _state.Status = "Index canceled.";
+            _state.Status = Loc.T("Scan canceled.");
         }
         catch (Exception ex)
         {
-            _state.Status = $"Index error: {ex.Message}";
+            _state.Status = Loc.F("Scan failed: {0}", ex.Message);
         }
         finally
         {

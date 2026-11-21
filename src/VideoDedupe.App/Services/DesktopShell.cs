@@ -38,11 +38,11 @@ public static class DesktopShell
         if (TopLevel() is not { } topLevel) return null;
         var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Select SQLite Database",
+            Title = Loc.T("Select SQLite Database"),
             AllowMultiple = false,
             FileTypeFilter =
             [
-                new FilePickerFileType("SQLite Database") { Patterns = ["*.db", "*.sqlite", "*.sqlite3"] },
+                new FilePickerFileType(Loc.T("SQLite Database")) { Patterns = ["*.db", "*.sqlite", "*.sqlite3"] },
                 FilePickerFileTypes.All
             ]
         });
