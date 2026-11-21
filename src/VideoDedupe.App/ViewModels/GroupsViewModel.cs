@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -18,11 +19,15 @@ namespace VideoDedupe.App.ViewModels;
 /// <summary>Duplicate groups and everything the user does with their files.</summary>
 public partial class GroupsViewModel : ObservableObject
 {
+    /// <summary>How long a single delete or quarantine can be undone before it really happens.</summary>
+    public static TimeSpan UndoWindow { get; set; } = TimeSpan.FromSeconds(8);
+
     private readonly AppState _state;
     private readonly Func<IReadOnlyList<int>> _thumbnailPositions;
     private readonly ThumbnailLoader _thumbnails = new();
     private CancellationTokenSource? _thumbCts;
     private CancellationTokenSource? _cleanupCts;
+    private PendingAction? _pending;
 
     public ObservableCollection<GroupVm> Groups { get; } = new();
     public ObservableCollection<GroupVm> FilteredGroups { get; } = new();
@@ -30,34 +35,69 @@ public partial class GroupsViewModel : ObservableObject
     public IReadOnlyList<Choice> SortOptions { get; } =
         [new("space", "Most space to free"), new("size", "Largest files"), new("newest", "Newest")];
 
+    public IReadOnlyList<Choice> CleanupTargetOptions { get; } =
+        [new("quarantine", "to the quarantine folder"), new("recycle", "to the Recycle Bin")];
+
     [ObservableProperty] private string filter = "";
     [ObservableProperty] private Choice sort;
+    [ObservableProperty] [NotifyPropertyChangedFor(nameof(CleanUpGroupText), nameof(CleanUpGroupTip), nameof(CleanUpAllTip))]
+    private Choice cleanupTarget;
 
     public string TabTitle => Loc.F("Duplicates ({0})", Groups.Count);
     [ObservableProperty] private GroupVm? selectedGroup;
+    [ObservableProperty] private MemberVm? currentMember;
     [ObservableProperty] private bool isCleaning;
 
     [ObservableProperty] private string summary = "";
 
-    public GroupsViewModel(AppState state, Func<IReadOnlyList<int>> thumbnailPositions)
+    /// <summary>Text of the undo bar; the bar shows while an action can still be undone.</summary>
+    [ObservableProperty] private string pendingText = "";
+    [ObservableProperty] private bool hasPendingAction;
+
+    /// <summary>Folder rules from the Folders tab; decide the best copy before quality does.</summary>
+    public FolderPriorities Priorities { get; private set; } = FolderPriorities.None;
+
+    /// <summary>A file was moved to the quarantine folder.</summary>
+    public event Action? QuarantineChanged;
+
+    private bool RecycleOnCleanup => CleanupTarget.Id == "recycle";
+
+    public string CleanUpGroupText => Loc.T(RecycleOnCleanup ? "Keep best, delete others" : "Keep best, quarantine others");
+
+    public string CleanUpGroupTip => Loc.T(RecycleOnCleanup
+        ? "Moves every file except the best one (or the files marked as keep) to the Recycle Bin. Asks first."
+        : "Moves every file except the best one (or the files marked as keep) to the quarantine folder. Asks first.");
+
+    public string CleanUpAllTip => Loc.T(RecycleOnCleanup
+        ? "Keep the best copy of every group and move the others to the Recycle Bin. Shows the full list first."
+        : "Keep the best copy of every group and move the others to the quarantine folder. Shows the full list first.");
+
+    public GroupsViewModel(AppState state, Func<IReadOnlyList<int>> thumbnailPositions, string? cleanupTarget = null)
     {
         _state = state;
         _thumbnailPositions = thumbnailPositions;
         sort = SortOptions[0];
+        this.cleanupTarget = CleanupTargetOptions.FirstOrDefault(o => o.Id == cleanupTarget) ?? CleanupTargetOptions[0];
         Groups.CollectionChanged += (_, _) => OnPropertyChanged(nameof(TabTitle));
         Loc.Instance.LanguageChanged += () =>
         {
             OnPropertyChanged(nameof(TabTitle));
+            OnPropertyChanged(nameof(CleanUpGroupText));
+            OnPropertyChanged(nameof(CleanUpGroupTip));
+            OnPropertyChanged(nameof(CleanUpAllTip));
             UpdateSummary();
             foreach (var group in Groups)
                 group.RefreshTexts();
         };
         state.DatabaseChanged += () =>
         {
+            // The pending action keeps its own database handle and still completes.
+            _ = CommitPendingAsync();
             _cleanupCts?.Cancel();
             Groups.Clear();
             FilteredGroups.Clear();
             SelectedGroup = null;
+            Priorities = FolderPriorities.None;
             CancelThumbnails();
             _thumbnails.Clear();
             UpdateSummary();
@@ -72,6 +112,7 @@ public partial class GroupsViewModel : ObservableObject
         CancelThumbnails();
         if (oldValue is not null)
             ThumbnailLoader.Release(oldValue);
+        CurrentMember = DefaultMember(newValue);
         if (newValue is null)
             return;
 
@@ -79,6 +120,16 @@ public partial class GroupsViewModel : ObservableObject
         _thumbCts = new CancellationTokenSource();
         _ = LoadThumbnailsAsync(newValue, delay: true, _thumbCts.Token);
     }
+
+    partial void OnCurrentMemberChanged(MemberVm? oldValue, MemberVm? newValue)
+    {
+        if (oldValue is not null) oldValue.IsCurrent = false;
+        if (newValue is not null) newValue.IsCurrent = true;
+    }
+
+    /// <summary>The first copy that is not the one to keep: what the user most likely removes next.</summary>
+    private static MemberVm? DefaultMember(GroupVm? group) =>
+        group?.Members.FirstOrDefault(m => !m.IsBest) ?? group?.Members.FirstOrDefault();
 
     private void CancelThumbnails()
     {
@@ -104,17 +155,22 @@ public partial class GroupsViewModel : ObservableObject
     }
 
     [RelayCommand]
-    public async Task LoadGroupsAsync()
+    public Task LoadGroupsAsync() => ReloadAsync(null);
+
+    private async Task ReloadAsync(long? selectGroupId)
     {
         try
         {
+            // A pending delete must happen first, or the reload would show the file again.
+            await CommitPendingAsync();
             using var _ = _state.Busy();
             _state.Status = Loc.T("Loading groups...");
             var db = await _state.OpenDbAsync();
+            Priorities = await LoadPrioritiesAsync(db);
             var groups = await db.ListDuplicateGroupsWithMembersAsync();
             var decisions = await db.GetDecisionsAsync(groups.SelectMany(g => g.Members).Select(m => m.File.Id));
 
-            var selectedId = SelectedGroup?.GroupId;
+            var selectedId = selectGroupId ?? SelectedGroup?.GroupId;
             SelectedGroup = null;
             Groups.Clear();
             foreach (var (g, members) in groups)
@@ -134,7 +190,26 @@ public partial class GroupsViewModel : ObservableObject
         }
     }
 
-    private void RefreshView(long? preferredGroupId = null)
+    private static async Task<FolderPriorities> LoadPrioritiesAsync(AppDb db) =>
+        new((await db.ListScanRootsAsync()).Select(r => (r.Path, (int)r.Priority)));
+
+    /// <summary>Called when a folder's priority changed: the best copy may now be another one.</summary>
+    public async Task ReloadPrioritiesAsync()
+    {
+        try
+        {
+            Priorities = await LoadPrioritiesAsync(await _state.OpenDbAsync());
+            foreach (var group in Groups)
+                group.UpdateBest();
+            UpdateSummary();
+        }
+        catch (Exception ex)
+        {
+            _state.Status = Loc.F("Error: {0}", ex.Message);
+        }
+    }
+
+    private void RefreshView(long? preferredGroupId = null, int? fallbackIndex = null)
     {
         IEnumerable<GroupVm> q = Sort.Id switch
         {
@@ -152,8 +227,11 @@ public partial class GroupsViewModel : ObservableObject
         foreach (var g in q)
             FilteredGroups.Add(g);
 
-        // Keep the selection where possible.
-        SelectedGroup = FilteredGroups.FirstOrDefault(g => g.GroupId == previous) ?? FilteredGroups.FirstOrDefault();
+        // Keep the selection where possible; otherwise stay at the same place in the list.
+        SelectedGroup = FilteredGroups.FirstOrDefault(g => g.GroupId == previous)
+                        ?? (fallbackIndex is int i && FilteredGroups.Count > 0
+                            ? FilteredGroups[Math.Clamp(i, 0, FilteredGroups.Count - 1)]
+                            : FilteredGroups.FirstOrDefault());
         UpdateSummary();
     }
 
@@ -169,6 +247,31 @@ public partial class GroupsViewModel : ObservableObject
 
     [ObservableProperty] private bool hasGroups;
     [ObservableProperty] private bool hasVisibleGroups;
+
+    // ----- keyboard navigation -----
+
+    /// <summary>Selects the previous (-1) or next (+1) group in the list.</summary>
+    public void SelectAdjacentGroup(int delta)
+    {
+        if (FilteredGroups.Count == 0) return;
+        var index = SelectedGroup is null ? -1 : FilteredGroups.IndexOf(SelectedGroup);
+        SelectedGroup = FilteredGroups[Math.Clamp(index + delta, 0, FilteredGroups.Count - 1)];
+    }
+
+    /// <summary>Moves the current file within the selected group.</summary>
+    public void SelectAdjacentMember(int delta)
+    {
+        if (SelectedGroup is not { Members.Count: > 0 } group) return;
+        var index = CurrentMember is null ? -1 : group.Members.IndexOf(CurrentMember);
+        CurrentMember = group.Members[Math.Clamp(index + delta, 0, group.Members.Count - 1)];
+    }
+
+    /// <summary>Makes the n-th file (0-based) of the selected group the current one.</summary>
+    public void SelectMember(int index)
+    {
+        if (SelectedGroup is { } group && index >= 0 && index < group.Members.Count)
+            CurrentMember = group.Members[index];
+    }
 
     // ----- member actions -----
 
@@ -222,35 +325,25 @@ public partial class GroupsViewModel : ObservableObject
     public async Task DeleteFileAsync(MemberVm? m)
     {
         if (m is null) return;
-        try
+        // On Windows the file goes to the Recycle Bin and can be restored, so no question.
+        // Elsewhere deleting is permanent and still asks first.
+        if (!OperatingSystem.IsWindows() && File.Exists(m.Path) && !await DesktopShell.ConfirmAsync(
+                Loc.T("Delete file"),
+                Loc.F("Permanently delete this file? This cannot be undone.\n\n{0}", m.Path),
+                Loc.T("Delete permanently")))
         {
-            // On Windows the file goes to the Recycle Bin and can be restored, so no question.
-            // Elsewhere deleting is permanent and still asks first.
-            if (!OperatingSystem.IsWindows() && File.Exists(m.Path) && !await DesktopShell.ConfirmAsync(
-                    Loc.T("Delete file"),
-                    Loc.F("Permanently delete this file? This cannot be undone.\n\n{0}", m.Path),
-                    Loc.T("Delete permanently")))
-            {
-                _state.Status = Loc.T("Delete canceled.");
-                return;
-            }
+            _state.Status = Loc.T("Delete canceled.");
+            return;
+        }
+        await StartPendingAsync(m, PendingKind.Delete);
+    }
 
-            using (_state.Busy())
-            {
-                if (File.Exists(m.Path))
-                    DesktopShell.DeleteFile(m.Path);
-                // Otherwise the file would stay "active" in later runs.
-                var db = await _state.OpenDbAsync();
-                await db.MarkMediaFileDeletedAsync(m.MediaId);
-            }
-            _state.Status = Loc.F("Deleted: {0}", m.FileName);
-            // Refresh every group: the same file can occur in more than one group.
-            await LoadGroupsAsync();
-        }
-        catch (Exception ex)
-        {
-            _state.Status = Loc.F("Delete failed: {0}", ex.Message);
-        }
+    [RelayCommand]
+    public async Task QuarantineAsync(MemberVm? m)
+    {
+        if (m is null) return;
+        if (!File.Exists(m.Path)) { _state.Status = Loc.T("File missing."); return; }
+        await StartPendingAsync(m, PendingKind.Quarantine);
     }
 
     [RelayCommand]
@@ -276,30 +369,6 @@ public partial class GroupsViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
-    public async Task QuarantineAsync(MemberVm? m)
-    {
-        if (m is null) return;
-        try
-        {
-            if (!File.Exists(m.Path)) { _state.Status = Loc.T("File missing."); return; }
-            string newPath;
-            using (_state.Busy())
-            {
-                var db = await _state.OpenDbAsync();
-                newPath = new FileMover(_state.QuarantineRoot).MoveToQuarantine(m.Path);
-                await db.MarkMediaFileQuarantinedAsync(m.MediaId, newPath);
-            }
-            // Refresh every group: the same file can occur in more than one group.
-            await LoadGroupsAsync();
-            _state.Status = Loc.F("Moved to quarantine: {0}", newPath);
-        }
-        catch (Exception ex)
-        {
-            _state.Status = Loc.F("Error: {0}", ex.Message);
-        }
-    }
-
     /// <summary>The file is not a copy of the others: remove it and never group them again.</summary>
     [RelayCommand]
     public async Task NotDuplicateAsync(MemberVm? m)
@@ -318,6 +387,8 @@ public partial class GroupsViewModel : ObservableObject
             else
             {
                 group.UpdateBest();
+                if (CurrentMember == m)
+                    CurrentMember = DefaultMember(group);
                 UpdateSummary();
             }
             _state.Status = Loc.F("Marked as not a duplicate: {0}", m.FileName);
@@ -351,8 +422,135 @@ public partial class GroupsViewModel : ObservableObject
     {
         await db.DeleteGroupAsync(group.GroupId);
         ThumbnailLoader.Release(group);
+        var index = FilteredGroups.IndexOf(group);
         Groups.Remove(group);
-        RefreshView(SelectedGroup == group ? null : SelectedGroup?.GroupId);
+        RefreshView(SelectedGroup == group ? null : SelectedGroup?.GroupId, index);
+    }
+
+    // ----- undo: a delete or quarantine only happens after the undo window -----
+
+    private enum PendingKind { Delete, Quarantine }
+
+    private sealed record PendingAction(
+        PendingKind Kind, long MediaId, string Path, string FileName, long GroupId,
+        AppDb Db, string QuarantineRoot, CancellationTokenSource Timer);
+
+    private async Task StartPendingAsync(MemberVm m, PendingKind kind)
+    {
+        try
+        {
+            await CommitPendingAsync();
+            var pending = new PendingAction(kind, m.MediaId, m.Path, m.FileName, m.Group.GroupId,
+                await _state.OpenDbAsync(), _state.QuarantineRoot, new CancellationTokenSource());
+            _pending = pending;
+            PendingText = Loc.F(kind == PendingKind.Delete ? "Deleted: {0}" : "Moved to quarantine: {0}", m.FileName);
+            HasPendingAction = true;
+            HideFile(m.MediaId);
+            _ = CommitAfterUndoWindowAsync(pending);
+        }
+        catch (Exception ex)
+        {
+            _state.Status = Loc.F("Error: {0}", ex.Message);
+        }
+    }
+
+    private async Task CommitAfterUndoWindowAsync(PendingAction pending)
+    {
+        try
+        {
+            await Task.Delay(UndoWindow, pending.Timer.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        if (_pending == pending)
+            await CommitPendingAsync();
+    }
+
+    /// <summary>Carries out the action waiting in the undo bar right away (before closing, scanning, ...).</summary>
+    public async Task CommitPendingAsync()
+    {
+        if (_pending is not { } pending) return;
+        _pending = null;
+        HasPendingAction = false;
+        pending.Timer.Cancel();
+        pending.Timer.Dispose();
+
+        try
+        {
+            using var _ = _state.Busy();
+            if (pending.Kind == PendingKind.Quarantine)
+            {
+                // Moving a big file across drives takes a while; keep the window responsive.
+                var mover = new FileMover(pending.QuarantineRoot);
+                var target = await Task.Run(() => mover.MoveToQuarantine(pending.Path));
+                await pending.Db.MarkMediaFileQuarantinedAsync(pending.MediaId, target);
+                _state.Status = Loc.F("Moved to quarantine: {0}", target);
+                QuarantineChanged?.Invoke();
+            }
+            else
+            {
+                if (File.Exists(pending.Path))
+                    DesktopShell.DeleteFile(pending.Path);
+                // Otherwise the file would stay "active" in later runs.
+                await pending.Db.MarkMediaFileDeletedAsync(pending.MediaId);
+                _state.Status = Loc.F("Deleted: {0}", pending.FileName);
+            }
+        }
+        catch (Exception ex)
+        {
+            _state.Status = Loc.F(pending.Kind == PendingKind.Delete ? "Delete failed: {0}" : "Error: {0}", ex.Message);
+            // The file is still there: show it again.
+            await ReloadAsync(pending.GroupId);
+        }
+    }
+
+    [RelayCommand]
+    public async Task UndoAsync()
+    {
+        if (_pending is not { } pending) return;
+        _pending = null;
+        HasPendingAction = false;
+        pending.Timer.Cancel();
+        pending.Timer.Dispose();
+        // Nothing happened on disk or in the database yet; reloading shows the file again.
+        await ReloadAsync(pending.GroupId);
+        _state.Status = Loc.F("Undone: {0}", pending.FileName);
+    }
+
+    /// <summary>Takes a file out of every group on screen (the database is unchanged until the commit).</summary>
+    private void HideFile(long mediaId)
+    {
+        var selected = SelectedGroup;
+        var index = selected is null ? 0 : FilteredGroups.IndexOf(selected);
+        var removedSelected = false;
+        foreach (var group in Groups.ToList())
+        {
+            var gone = group.Members.Where(m => m.MediaId == mediaId).ToList();
+            if (gone.Count == 0) continue;
+            foreach (var member in gone)
+                group.Members.Remove(member);
+            if (group.Members.Count < 2)
+            {
+                ThumbnailLoader.Release(group);
+                Groups.Remove(group);
+                removedSelected |= group == selected;
+            }
+            else
+            {
+                group.UpdateBest();
+            }
+        }
+
+        if (removedSelected)
+            RefreshView(null, index);
+        else
+        {
+            if (CurrentMember?.MediaId == mediaId)
+                CurrentMember = DefaultMember(selected);
+            RefreshView(selected?.GroupId);
+        }
     }
 
     // ----- clean-up -----
@@ -367,15 +565,17 @@ public partial class GroupsViewModel : ObservableObject
     [RelayCommand]
     public void CancelCleanUp() => _cleanupCts?.Cancel();
 
-    /// <summary>Moves every file except the one to keep to quarantine, after a confirmation that lists them.</summary>
+    /// <summary>Removes every file except the one to keep, after a confirmation that lists them.</summary>
     private async Task CleanUpAsync(IReadOnlyList<GroupVm> groups, string scope)
     {
         if (IsCleaning) return;
+        await CommitPendingAsync();
+        var recycle = RecycleOnCleanup;
         var decisions = groups.SelectMany(g => g.Members).Where(m => m.Decision is not null)
             .DistinctBy(m => m.MediaId).ToDictionary(m => m.MediaId, m => m.Decision!);
         var plan = CleanupPlanner.Create(
             groups.Select(g => new CleanupPlanner.Group(g.GroupId, g.Members.Select(m => m.File).ToList())),
-            decisions, File.Exists);
+            decisions, File.Exists, Priorities);
         if (plan.Items.Count == 0)
         {
             _state.Status = Loc.T("Nothing to clean up.");
@@ -387,21 +587,25 @@ public partial class GroupsViewModel : ObservableObject
         {
             details.AppendLine($"#{group.Key}  {Loc.T("keep")}  {group.First().KeptFile.Path}");
             foreach (var item in group)
-                details.AppendLine($"      {Loc.T("move")}  {item.File.Path}  ({GroupVm.FormatSize(item.File.SizeBytes)})");
+                details.AppendLine($"      {Loc.T(recycle ? "delete" : "move")}  {item.File.Path}  ({GroupVm.FormatSize(item.File.SizeBytes)})");
         }
-        var message =
-            Loc.F("Clean up {0}: move {1} files from {2} groups to the quarantine folder and free {3}.",
-                scope, plan.Items.Count, plan.GroupCount, GroupVm.FormatSize(plan.Bytes)) + "\n\n" +
-            Loc.F("Each group keeps its best copy, or the files you marked as keep. Nothing is deleted: the files can be moved back from\n{0}",
-                _state.QuarantineRoot);
-        if (!await DesktopShell.ConfirmAsync(Loc.T("Clean up duplicates"), message, Loc.F("Move {0} files", plan.Items.Count),
+        var message = recycle
+            ? Loc.F("Clean up {0}: move {1} files from {2} groups to the Recycle Bin and free {3}.",
+                  scope, plan.Items.Count, plan.GroupCount, GroupVm.FormatSize(plan.Bytes)) + "\n\n" +
+              Loc.T("Each group keeps its best copy, or the files you marked as keep. The files can be restored from the Recycle Bin.")
+            : Loc.F("Clean up {0}: move {1} files from {2} groups to the quarantine folder and free {3}.",
+                  scope, plan.Items.Count, plan.GroupCount, GroupVm.FormatSize(plan.Bytes)) + "\n\n" +
+              Loc.F("Each group keeps its best copy, or the files you marked as keep. Nothing is deleted: the files can be moved back from\n{0}",
+                  _state.QuarantineRoot);
+        if (!await DesktopShell.ConfirmAsync(Loc.T("Clean up duplicates"), message,
+                Loc.F(recycle ? "Delete {0} files" : "Move {0} files", plan.Items.Count),
                 details.ToString().TrimEnd()))
         {
             _state.Status = Loc.T("Clean-up canceled.");
             return;
         }
 
-        var moved = 0;
+        var done = 0;
         var canceled = false;
         var failed = new List<string>();
         _cleanupCts = new CancellationTokenSource();
@@ -414,16 +618,27 @@ public partial class GroupsViewModel : ObservableObject
             foreach (var item in plan.Items)
             {
                 _cleanupCts.Token.ThrowIfCancellationRequested();
-                _state.Status = Loc.F("Moving {0}/{1}: {2}", moved + failed.Count + 1, plan.Items.Count, item.File.Path);
+                _state.Status = Loc.F(recycle ? "Deleting {0}/{1}: {2}" : "Moving {0}/{1}: {2}",
+                    done + failed.Count + 1, plan.Items.Count, item.File.Path);
                 try
                 {
-                    // Moving a big file across drives takes a while; keep the window responsive.
-                    var target = await Task.Run(() => mover.MoveToQuarantine(item.File.Path));
-                    await db.MarkMediaFileQuarantinedAsync(item.File.Id, target);
-                    moved++;
+                    if (recycle)
+                    {
+                        DesktopShell.DeleteFile(item.File.Path);
+                        await db.MarkMediaFileDeletedAsync(item.File.Id);
+                    }
+                    else
+                    {
+                        // Moving a big file across drives takes a while; keep the window responsive.
+                        var target = await Task.Run(() => mover.MoveToQuarantine(item.File.Path));
+                        await db.MarkMediaFileQuarantinedAsync(item.File.Id, target);
+                    }
+                    done++;
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                               or OperationCanceledException { CancellationToken.IsCancellationRequested: false })
                 {
+                    // The Recycle Bin reports a canceled error dialog as OperationCanceledException.
                     failed.Add($"{item.File.Path}: {ex.Message}");
                 }
             }
@@ -440,11 +655,45 @@ public partial class GroupsViewModel : ObservableObject
         }
 
         await LoadGroupsAsync();
-        var result = Loc.F(canceled
-            ? "Moved {0} of {1} files to quarantine (canceled)."
-            : "Moved {0} of {1} files to quarantine.", moved, plan.Items.Count);
+        if (!recycle && done > 0)
+            QuarantineChanged?.Invoke();
+        var result = recycle
+            ? Loc.F(canceled ? "Moved {0} of {1} files to the Recycle Bin (canceled)." : "Moved {0} of {1} files to the Recycle Bin.",
+                done, plan.Items.Count)
+            : Loc.F(canceled ? "Moved {0} of {1} files to quarantine (canceled)." : "Moved {0} of {1} files to quarantine.",
+                done, plan.Items.Count);
         if (failed.Count > 0)
             result += Loc.F(" {0} failed: {1}", failed.Count, string.Join(" | ", failed.Take(3)));
         _state.Status = result;
+    }
+
+    // ----- report -----
+
+    [RelayCommand]
+    public async Task ExportCsvAsync()
+    {
+        if (Groups.Count == 0)
+        {
+            _state.Status = Loc.T("No duplicates found yet.");
+            return;
+        }
+        try
+        {
+            var path = await DesktopShell.PickSaveFileAsync(Loc.T("Export duplicates"),
+                $"duplicates-{DateTime.Now:yyyy-MM-dd}.csv", Loc.T("CSV table"), "*.csv");
+            if (path is null) return;
+
+            var rows = FilteredGroups.Concat(Groups.Except(FilteredGroups))
+                .SelectMany(g => g.Members.Select(m => new DuplicateReport.Row(g.GroupId, m.IsBest, m.Evidence)))
+                .ToList();
+            var culture = Loc.Instance.Language == Loc.German ? CultureInfo.GetCultureInfo("de-DE") : CultureInfo.InvariantCulture;
+            await using (var writer = new StreamWriter(path, append: false, DuplicateReport.FileEncoding))
+                DuplicateReport.WriteCsv(writer, rows, culture, Loc.T);
+            _state.Status = Loc.F("Exported {0} groups to {1}", Groups.Count, path);
+        }
+        catch (Exception ex)
+        {
+            _state.Status = Loc.F("Export failed: {0}", ex.Message);
+        }
     }
 }

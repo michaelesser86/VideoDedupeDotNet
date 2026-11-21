@@ -128,6 +128,11 @@ CREATE TABLE IF NOT EXISTS NotDuplicatePair (
 );
 ");
 
+        // Keep files from preferred folders, clear avoided folders first (FolderPriorities).
+        await db.EnsureColumnAsync("ScanRoot", "Priority", "INTEGER NOT NULL DEFAULT 0");
+        // Where a quarantined file went, so it can be restored.
+        await db.EnsureColumnAsync("ReviewDecision", "QuarantinePath", "TEXT NULL");
+
         await db.EnsureColumnAsync("MediaFile", "DurationSec", "REAL");
         await db.EnsureColumnAsync("MediaFile", "Width", "INTEGER");
         await db.EnsureColumnAsync("MediaFile", "Height", "INTEGER");

@@ -21,6 +21,24 @@ public class TrimTests
          });
 
     [Fact]
+    public void FallbackAnchorMatchesWhenTheFirstAnchorIsAFade()
+    {
+        ulong second = Picture();
+        var original = File(1, 600, 0, Picture());   // black at the start anchor (a fade)
+        var copy = File(2, 540, 0, Picture());       // credits cut, same fade
+        var unrelated = File(3, 560, 0, Picture());
+        original.Item2[TrimMatcher.StartFallbackKey] = Hash(second);
+        copy.Item2[TrimMatcher.StartFallbackKey] = Hash(second);
+        unrelated.Item2[TrimMatcher.StartFallbackKey] = Hash(Picture());
+
+        var candidate = Assert.Single(TrimMatcher.FindCandidates([original, copy, unrelated], 0.25, 10, matchMirrored: false));
+        Assert.Equal((1L, 2L), (candidate.Longer.Id, candidate.Shorter.Id));
+        Assert.Equal(AppDb.TrimKinds.SameStart, candidate.Kind);
+        Assert.Equal(TrimMatcher.FallbackAnchorSec, DupeBuildService.TimeOf(TrimMatcher.StartFallbackKey, 600));
+        Assert.Equal(600 - TrimMatcher.FallbackAnchorSec, DupeBuildService.TimeOf(TrimMatcher.EndFallbackKey, 600));
+    }
+
+    [Fact]
     public void FindsCopiesSharingStartOrEnd()
     {
         ulong shared = Picture(), shared2 = Picture();

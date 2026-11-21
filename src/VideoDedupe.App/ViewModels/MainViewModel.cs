@@ -21,6 +21,7 @@ public partial class MainViewModel : ObservableObject
     public LibraryViewModel Library { get; }
     public DupeBuildViewModel Build { get; }
     public GroupsViewModel Groups { get; }
+    public QuarantineViewModel Quarantine { get; }
 
     public IReadOnlyList<Choice> LanguageOptions { get; } =
         [new(Loc.English, "English", translate: false), new(Loc.German, "Deutsch", translate: false)];
@@ -51,8 +52,13 @@ public partial class MainViewModel : ObservableObject
 
         Library = new LibraryViewModel(State);
         Build = new DupeBuildViewModel(State, settings);
-        Groups = new GroupsViewModel(State, () => Build.FramePositions);
+        Groups = new GroupsViewModel(State, () => Build.FramePositions, settings.CleanupTarget);
+        Quarantine = new QuarantineViewModel(State);
         Build.Finished += Groups.LoadGroupsAsync;
+        State.FlushPendingAsync = Groups.CommitPendingAsync;
+        Groups.QuarantineChanged += () => _ = Quarantine.LoadAsync();
+        Quarantine.Restored += Groups.LoadGroupsAsync;
+        Library.PrioritiesChanged += () => _ = Groups.ReloadPrioritiesAsync();
         // Another database: show its folders and groups right away.
         State.DatabaseChanged += () => _ = LoadAllAsync();
 
@@ -82,6 +88,7 @@ public partial class MainViewModel : ObservableObject
     {
         await Library.LoadRootsAsync();
         await Groups.LoadGroupsAsync();
+        await Quarantine.LoadAsync();
         State.Status = Groups.Groups.Count > 0
             ? $"{Groups.Summary}."
             : Library.Roots.Count == 0
@@ -98,7 +105,8 @@ public partial class MainViewModel : ObservableObject
             QuarantineRoot = State.QuarantineRoot,
             Theme = SelectedTheme.Id,
             Language = SelectedLanguage.Id,
-            ColorScheme = SelectedColorScheme.Id
+            ColorScheme = SelectedColorScheme.Id,
+            CleanupTarget = Groups.CleanupTarget.Id
         };
         Build.SaveTo(settings);
         settings.Save(AppPaths.SettingsFile);
@@ -110,7 +118,10 @@ public partial class MainViewModel : ObservableObject
         try
         {
             if (await DesktopShell.PickDatabaseAsync() is { } path)
+            {
+                await State.FlushPendingAsync();
                 State.DbPath = path;
+            }
         }
         catch (Exception ex)
         {

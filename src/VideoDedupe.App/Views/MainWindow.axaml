@@ -26,10 +26,12 @@
   </Window.Resources>
 
   <Window.Styles>
+    <!-- Four tabs must fit in one row of the left column. -->
     <Style Selector="TabItem">
-      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="FontSize" Value="14"/>
       <Setter Property="MinHeight" Value="40"/>
-      <Setter Property="Padding" Value="10,0"/>
+      <Setter Property="MinWidth" Value="0"/>
+      <Setter Property="Padding" Value="7,0"/>
     </Style>
   </Window.Styles>
 
@@ -104,18 +106,18 @@
       <Border Classes="card" Padding="12" IsVisible="{Binding Groups.IsCleaning}">
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
           <TextBlock VerticalAlignment="Center" FontWeight="SemiBold"
-                     Text="{l:T 'Moving files to the quarantine folder… (see the status above)'}"/>
+                     Text="{l:T 'Cleaning up… (see the status above)'}"/>
           <Button Grid.Column="1" Content="{l:T 'Cancel'}" Command="{Binding Groups.CancelCleanUpCommand}"/>
         </Grid>
       </Border>
     </StackPanel>
 
     <!-- ===================== MAIN ===================== -->
-    <Grid Grid.Row="2" ColumnDefinitions="400,8,*" MinHeight="0">
+    <Grid Grid.Row="2" ColumnDefinitions="420,8,*" MinHeight="0">
 
       <!-- ========== LEFT: tabs ========== -->
       <Border Grid.Column="0" Classes="card" Padding="12,4,12,12">
-        <TabControl Padding="0,8,0,0">
+        <TabControl x:Name="Tabs" Padding="0,8,0,0">
 
           <!-- Duplicates -->
           <TabItem>
@@ -140,12 +142,20 @@
               <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
                 <TextBlock VerticalAlignment="Center" Classes="caption" TextWrapping="Wrap"
                            Text="{Binding Groups.Summary}"/>
-                <Button Grid.Column="1"
-                        Content="{l:T 'Clean up all…'}"
-                        ToolTip.Tip="{l:T 'Keep the best copy of every group and move the others to the quarantine folder. Shows the full list first.'}"
-                        Command="{Binding Groups.CleanUpAllCommand}"
-                        IsEnabled="{Binding !State.IsBusy}"
-                        IsVisible="{Binding Groups.HasGroups}"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                            IsVisible="{Binding Groups.HasGroups}">
+                  <Button Content="{l:T 'Clean up all…'}"
+                          ToolTip.Tip="{Binding Groups.CleanUpAllTip}"
+                          Command="{Binding Groups.CleanUpAllCommand}"
+                          IsEnabled="{Binding !State.IsBusy}"/>
+                  <Button Content="⋯" ToolTip.Tip="{l:T 'More actions'}" AutomationProperties.Name="{l:T 'More actions'}">
+                    <Button.Flyout>
+                      <MenuFlyout Placement="BottomEdgeAlignedRight">
+                        <MenuItem Header="{l:T 'Export as CSV…'}" Command="{Binding Groups.ExportCsvCommand}"/>
+                      </MenuFlyout>
+                    </Button.Flyout>
+                  </Button>
+                </StackPanel>
               </Grid>
 
               <!-- No ScrollViewer around the ListBox: its own one keeps the list virtualized. -->
@@ -215,11 +225,13 @@
                                 IsChecked="{Binding IsEnabled}"
                                 ToolTip.Tip="{l:T 'Include this folder when scanning'}"
                                 AutomationProperties.Name="{Binding Path}"/>
-                      <TextBlock Grid.Column="1"
-                                 VerticalAlignment="Center"
-                                 TextTrimming="PathSegmentEllipsis"
-                                 Text="{Binding Path}"
-                                 ToolTip.Tip="{Binding Path}"/>
+                      <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+                        <TextBlock TextTrimming="PathSegmentEllipsis"
+                                   Text="{Binding Path}"
+                                   ToolTip.Tip="{Binding Path}"/>
+                        <TextBlock Classes="caption" Text="{Binding Priority.Label}"
+                                   IsVisible="{Binding HasPriority}"/>
+                      </StackPanel>
                     </Grid>
                   </DataTemplate>
                 </ListBox.ItemTemplate>
@@ -240,9 +252,93 @@
                   <CheckBox Content="{l:T 'Include subfolders'}" IsChecked="{Binding Library.SelectedRoot.IncludeSubdirs}"/>
                   <TextBox PlaceholderText="{l:T 'Skip paths containing… (e.g. temp;cache;whatsapp)'}"
                            Text="{Binding Library.SelectedRoot.ExcludeText}"/>
+                  <TextBlock Text="{l:T 'When a video is in several folders'}"/>
+                  <ComboBox HorizontalAlignment="Stretch"
+                            ItemsSource="{x:Static vm:RootVm.PriorityOptions}"
+                            SelectedItem="{Binding Library.SelectedRoot.Priority}"
+                            ItemTemplate="{StaticResource ChoiceTemplate}"/>
+                  <TextBlock Classes="caption" TextWrapping="Wrap"
+                             Text="{l:T 'Decides which copy is kept before resolution and size do. Example: keep your archive, clear Downloads first.'}"/>
                   <Button Content="{l:T 'Remove folder'}"
                           ToolTip.Tip="{l:T 'Stops scanning this folder. No files are deleted.'}"
                           Command="{Binding Library.RemoveSelectedRootCommand}"/>
+                </StackPanel>
+              </Border>
+            </Grid>
+          </TabItem>
+
+          <!-- Quarantine -->
+          <TabItem>
+            <TabItem.Header>
+              <TextBlock Text="{Binding Quarantine.TabTitle}"/>
+            </TabItem.Header>
+            <Grid RowDefinitions="Auto,*,Auto" RowSpacing="10">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBlock VerticalAlignment="Center" Classes="caption" TextWrapping="Wrap"
+                           Text="{Binding Quarantine.Summary}"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                  <Button Content="{l:T 'Open folder'}" Command="{Binding Quarantine.OpenFolderCommand}"/>
+                  <Button Content="{l:T 'Delete all…'}"
+                          ToolTip.Tip="{l:T 'Move every file in the quarantine folder to the Recycle Bin. Asks first.'}"
+                          Command="{Binding Quarantine.DeleteAllCommand}"
+                          IsEnabled="{Binding !State.IsBusy}"
+                          IsVisible="{Binding Quarantine.HasItems}"/>
+                </StackPanel>
+              </Grid>
+
+              <ListBox Grid.Row="1"
+                       Background="Transparent"
+                       ItemsSource="{Binding Quarantine.Items}"
+                       SelectedItem="{Binding Quarantine.SelectedItem}"
+                       AutomationProperties.Name="{l:T 'Quarantined files'}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:QuarantineItemVm">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                      <StackPanel Spacing="2">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <Border Classes="badge warn" IsVisible="{Binding IsMissing}">
+                            <TextBlock Text="{l:T 'MISSING'}"/>
+                          </Border>
+                          <TextBlock FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                     Text="{Binding FileName}" ToolTip.Tip="{Binding QuarantinePath}"/>
+                        </StackPanel>
+                        <TextBlock Classes="caption" TextTrimming="PathSegmentEllipsis"
+                                   Text="{Binding OriginalFolder}" ToolTip.Tip="{Binding OriginalPath}"/>
+                      </StackPanel>
+                      <TextBlock Grid.Column="1" VerticalAlignment="Center" Classes="caption" Text="{Binding SizeText}"/>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+
+              <StackPanel Grid.Row="1" Margin="8,24" Spacing="6" IsVisible="{Binding !Quarantine.HasItems}">
+                <TextBlock Classes="h2" Text="{l:T 'Quarantine is empty'}"/>
+                <TextBlock Classes="dim" TextWrapping="Wrap"
+                           Text="{l:T 'Files you move to quarantine show up here. You can put them back or delete them for good.'}"/>
+              </StackPanel>
+
+              <Border Grid.Row="2" Classes="card" Padding="12"
+                      Background="{DynamicResource SubtleFillBrush}"
+                      IsVisible="{Binding Quarantine.SelectedItem, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <StackPanel Spacing="8">
+                  <TextBlock FontWeight="SemiBold" TextTrimming="PathSegmentEllipsis"
+                             Text="{Binding Quarantine.SelectedItem.OriginalPath}"
+                             ToolTip.Tip="{Binding Quarantine.SelectedItem.OriginalPath}"/>
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button Classes="accent" Content="{l:T 'Restore'}"
+                            ToolTip.Tip="{l:T 'Move the file back to its original folder.'}"
+                            Command="{Binding Quarantine.RestoreCommand}"
+                            CommandParameter="{Binding Quarantine.SelectedItem}"
+                            IsEnabled="{Binding !State.IsBusy}"/>
+                    <Button Content="{l:T 'Delete'}"
+                            ToolTip.Tip="{l:T 'Move this file to the Recycle Bin.'}"
+                            Command="{Binding Quarantine.DeleteCommand}"
+                            CommandParameter="{Binding Quarantine.SelectedItem}"
+                            IsEnabled="{Binding !State.IsBusy}"/>
+                    <Button Content="{l:T 'Show in Explorer'}"
+                            Command="{Binding Quarantine.ShowInExplorerCommand}"
+                            CommandParameter="{Binding Quarantine.SelectedItem}"/>
+                  </StackPanel>
                 </StackPanel>
               </Border>
             </Grid>
@@ -299,7 +395,12 @@
                     <Button Grid.Column="1" Content="{l:T 'Browse…'}" Command="{Binding PickQuarantineCommand}"/>
                   </Grid>
                   <TextBlock Classes="caption" TextWrapping="Wrap"
-                             Text="{l:T 'Clean-up moves files here instead of deleting them, so you can still restore them.'}"/>
+                             Text="{l:T 'Quarantined files can be restored in the Quarantine tab.'}"/>
+                  <TextBlock Text="{l:T 'Clean-up moves the copies'}"/>
+                  <ComboBox HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding Groups.CleanupTargetOptions}"
+                            SelectedItem="{Binding Groups.CleanupTarget}"
+                            ItemTemplate="{StaticResource ChoiceTemplate}"/>
                 </StackPanel>
 
                 <StackPanel Spacing="10">
@@ -370,7 +471,7 @@
                        Text="{l:T 'Select a group on the left to compare its copies side by side.'}"/>
           </StackPanel>
 
-          <Grid RowDefinitions="Auto,*" RowSpacing="12"
+          <Grid RowDefinitions="Auto,Auto,*" RowSpacing="12"
                 IsVisible="{Binding Groups.SelectedGroup, Converter={x:Static ObjectConverters.IsNotNull}}">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
               <StackPanel Spacing="2">
@@ -393,38 +494,43 @@
                         CommandParameter="{Binding Groups.SelectedGroup}"
                         IsEnabled="{Binding !State.IsBusy}"/>
                 <Button Classes="accent"
-                        Content="{l:T 'Keep best, quarantine others'}"
-                        ToolTip.Tip="{l:T 'Moves every file except the best one (or the files marked as keep) to the quarantine folder. Asks first.'}"
+                        Content="{Binding Groups.CleanUpGroupText}"
+                        ToolTip.Tip="{Binding Groups.CleanUpGroupTip}"
                         Command="{Binding Groups.CleanUpGroupCommand}"
                         CommandParameter="{Binding Groups.SelectedGroup}"
                         IsEnabled="{Binding !State.IsBusy}"/>
               </StackPanel>
             </Grid>
 
-            <ScrollViewer Grid.Row="1">
+            <TextBlock Grid.Row="1" Classes="caption" TextWrapping="Wrap"
+                       Text="{l:T 'Keys: ↑↓ group · ←→ or 1–9 file · Del delete · Q quarantine · B keep · N not a duplicate · Enter open · Ctrl+Z undo'}"/>
+
+            <ScrollViewer Grid.Row="2">
               <ItemsControl ItemsSource="{Binding Groups.SelectedGroup.Members}" Margin="0,0,12,0">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:MemberVm">
                     <Border Classes="member"
                             Classes.best="{Binding IsBest}"
+                            Classes.current="{Binding IsCurrent}"
+                            PointerPressed="Member_PointerPressed"
                             DoubleTapped="Member_DoubleTapped">
                       <Border.ContextMenu>
                         <ContextMenu>
                           <MenuItem Header="{l:T 'Open'}" InputGesture="Enter"
                                     Command="{Binding Owner.OpenFileCommand}" CommandParameter="{Binding .}"/>
-                          <MenuItem Header="{l:T 'Show in Explorer'}"
+                          <MenuItem Header="{l:T 'Show in Explorer'}" InputGesture="E"
                                     Command="{Binding Owner.ShowInExplorerCommand}" CommandParameter="{Binding .}"/>
                           <MenuItem Header="{l:T 'Copy path'}"
                                     Command="{Binding Owner.CopyPathCommand}" CommandParameter="{Binding .}"/>
                           <Separator/>
-                          <MenuItem Header="{l:T 'Keep this file'}"
+                          <MenuItem Header="{l:T 'Keep this file'}" InputGesture="B"
                                     Command="{Binding Owner.MarkKeepCommand}" CommandParameter="{Binding .}"/>
-                          <MenuItem Header="{l:T 'Move to quarantine'}"
+                          <MenuItem Header="{l:T 'Move to quarantine'}" InputGesture="Q"
                                     Command="{Binding Owner.QuarantineCommand}" CommandParameter="{Binding .}"/>
-                          <MenuItem Header="{l:T 'Not a duplicate'}"
+                          <MenuItem Header="{l:T 'Not a duplicate'}" InputGesture="N"
                                     Command="{Binding Owner.NotDuplicateCommand}" CommandParameter="{Binding .}"/>
                           <Separator/>
-                          <MenuItem Header="{l:T 'Delete'}"
+                          <MenuItem Header="{l:T 'Delete'}" InputGesture="Delete"
                                     Command="{Binding Owner.DeleteFileCommand}" CommandParameter="{Binding .}"/>
                         </ContextMenu>
                       </Border.ContextMenu>
@@ -433,6 +539,9 @@
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                           <StackPanel Spacing="3">
                             <StackPanel Orientation="Horizontal" Spacing="6">
+                              <Border Classes="badge number" ToolTip.Tip="{l:T 'Press this number to select the file'}">
+                                <TextBlock Text="{Binding Number}"/>
+                              </Border>
                               <Border Classes="badge best" IsVisible="{Binding IsBest}">
                                 <TextBlock Text="{l:T 'BEST'}"/>
                               </Border>
@@ -526,5 +635,15 @@
       </Border>
     </Grid>
   </Grid>
+
+  <!-- Undo bar: a delete or quarantine only happens once this disappears. -->
+  <Border Classes="card undo" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,28"
+          Padding="16,8,8,8" IsVisible="{Binding Groups.HasPendingAction}">
+    <StackPanel Orientation="Horizontal" Spacing="14">
+      <TextBlock VerticalAlignment="Center" MaxWidth="560" TextTrimming="CharacterEllipsis"
+                 Text="{Binding Groups.PendingText}"/>
+      <Button Classes="accent" Content="{l:T 'Undo (Ctrl+Z)'}" Command="{Binding Groups.UndoCommand}"/>
+    </StackPanel>
+  </Border>
   </Panel>
 </Window>

@@ -47,9 +47,11 @@ public partial class GroupVm : ObservableObject
         if (Members.Count > 0)
         {
             var decisions = Members.Where(m => m.Decision is not null).ToDictionary(m => m.MediaId, m => m.Decision!);
-            _best = BestFileSelector.Choose(Members.Select(m => m.File).ToList(), decisions);
+            _best = BestFileSelector.Choose(Members.Select(m => m.File).ToList(), decisions, Owner.Priorities);
             Members.First(m => m.MediaId == _best.File.Id).IsBest = true;
         }
+        for (var i = 0; i < Members.Count; i++)
+            Members[i].Number = i + 1;
         RefreshTexts();
         OnPropertyChanged(nameof(BestFileName));
     }
@@ -74,6 +76,8 @@ public partial class GroupVm : ObservableObject
         BestFileSelector.ReasonKind.HighestResolution => Loc.F("highest resolution ({0}×{1})", c.File.Width, c.File.Height),
         BestFileSelector.ReasonKind.LargestFile => Loc.T("same resolution, largest file (most detail)"),
         BestFileSelector.ReasonKind.Newest => Loc.T("same resolution and size, newest"),
+        BestFileSelector.ReasonKind.PreferredFolder => Loc.T("in a preferred folder"),
+        BestFileSelector.ReasonKind.OthersInAvoidedFolder => Loc.T("the other copies are in folders to clear first"),
         _ => Loc.T("same quality as the others")
     };
 
@@ -109,6 +113,12 @@ public partial class MemberVm : ObservableObject
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(BestText))] private bool isBest;
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(BestText))] private string bestReason = "";
     [ObservableProperty] [NotifyPropertyChangedFor(nameof(IsKept))] private string? decision;
+
+    /// <summary>The file the keyboard shortcuts act on.</summary>
+    [ObservableProperty] private bool isCurrent;
+
+    /// <summary>Position in the group, shown on the card; keys 1-9 select it.</summary>
+    [ObservableProperty] private int number;
 
     public MemberVm(GroupVm group, AppDb.GroupMember evidence)
     {
@@ -190,6 +200,20 @@ public partial class RootVm : ObservableObject
     [ObservableProperty] private bool isEnabled;
     [ObservableProperty] private bool includeSubdirs = true;
     [ObservableProperty] private string? excludeText;
+    [ObservableProperty] private Choice priority = PriorityOptions[1];
+
+    public static IReadOnlyList<Choice> PriorityOptions { get; } =
+    [
+        new("1", "Keep files from here"),
+        new("0", "Normal"),
+        new("-1", "Remove copies from here first")
+    ];
+
+    public static Choice PriorityOption(long value) =>
+        PriorityOptions.FirstOrDefault(o => o.Id == value.ToString(CultureInfo.InvariantCulture)) ?? PriorityOptions[1];
+
+    public int PriorityValue => int.Parse(Priority.Id, CultureInfo.InvariantCulture);
+    public bool HasPriority => PriorityValue != FolderPriorities.Normal;
 
     /// <summary>Set after loading; every edit is saved right away, there is no save button.</summary>
     public Action<RootVm>? Changed { get; set; }
@@ -197,4 +221,9 @@ public partial class RootVm : ObservableObject
     partial void OnIsEnabledChanged(bool value) => Changed?.Invoke(this);
     partial void OnIncludeSubdirsChanged(bool value) => Changed?.Invoke(this);
     partial void OnExcludeTextChanged(string? value) => Changed?.Invoke(this);
+    partial void OnPriorityChanged(Choice value)
+    {
+        OnPropertyChanged(nameof(HasPriority));
+        Changed?.Invoke(this);
+    }
 }

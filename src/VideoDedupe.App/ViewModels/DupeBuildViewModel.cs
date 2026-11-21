@@ -111,6 +111,7 @@ public partial class DupeBuildViewModel : ObservableObject
         var succeeded = false;
         try
         {
+            await _state.FlushPendingAsync();
             using var _ = _state.Busy();
             IsBuilding = true;
             Phase = "Starting...";

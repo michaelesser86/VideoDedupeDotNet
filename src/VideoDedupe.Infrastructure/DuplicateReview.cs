@@ -8,16 +8,24 @@ public static class BestFileSelector
     public const string KeepDecision = "keep";
 
     /// <summary>Why a file was chosen; lets the app word the reason in its own language.</summary>
-    public enum ReasonKind { MarkedKeep, OnlyFile, HighestResolution, LargestFile, Newest, SameQuality }
+    public enum ReasonKind
+    {
+        MarkedKeep, OnlyFile, HighestResolution, LargestFile, Newest, SameQuality,
+        /// <summary>The file is in a folder the user prefers to keep.</summary>
+        PreferredFolder,
+        /// <summary>The other copies are in folders the user wants cleared first.</summary>
+        OthersInAvoidedFolder
+    }
 
     public sealed record Choice(AppDb.MediaFileRow File, string Reason, ReasonKind Kind);
 
     /// <summary>
-    /// Files the user marked as keep win; otherwise the highest resolution, then the largest
-    /// file (more bitrate at the same resolution), then the newest.
+    /// Files the user marked as keep win; then files from the highest-priority folder; among
+    /// those the highest resolution, then the largest file (more bitrate at the same
+    /// resolution), then the newest.
     /// </summary>
     public static Choice Choose(IReadOnlyList<AppDb.MediaFileRow> files,
-        IReadOnlyDictionary<long, string>? decisions = null)
+        IReadOnlyDictionary<long, string>? decisions = null, FolderPriorities? priorities = null)
     {
         if (files.Count == 0)
             throw new ArgumentException("A group needs at least one file.", nameof(files));
@@ -25,6 +33,16 @@ public static class BestFileSelector
         var kept = files.Where(f => decisions?.GetValueOrDefault(f.Id) == KeepDecision).ToList();
         if (kept.Count > 0)
             return new Choice(Rank(kept)[0], "marked as keep", ReasonKind.MarkedKeep);
+
+        if (priorities is { HasRules: true })
+        {
+            var top = files.Max(f => priorities.Of(f.Path));
+            var preferred = files.Where(f => priorities.Of(f.Path) == top).ToList();
+            if (preferred.Count < files.Count)
+                return top == FolderPriorities.Prefer
+                    ? new Choice(Rank(preferred)[0], "in a preferred folder", ReasonKind.PreferredFolder)
+                    : new Choice(Rank(preferred)[0], "the other copies are in folders to clear first", ReasonKind.OthersInAvoidedFolder);
+        }
 
         var ranked = Rank(files);
         var best = ranked[0];
@@ -78,7 +96,7 @@ public static class CleanupPlanner
     /// copies. Missing files are ignored.
     /// </summary>
     public static Plan Create(IEnumerable<Group> groups, IReadOnlyDictionary<long, string> decisions,
-        Func<string, bool> exists)
+        Func<string, bool> exists, FolderPriorities? priorities = null)
     {
         var usable = new List<(Group Group, List<AppDb.MediaFileRow> Present, List<AppDb.MediaFileRow> Keepers)>();
         foreach (var group in groups)
@@ -88,7 +106,7 @@ public static class CleanupPlanner
                 continue;
             var keepers = present.Where(m => decisions.GetValueOrDefault(m.Id) == BestFileSelector.KeepDecision).ToList();
             if (keepers.Count == 0)
-                keepers.Add(BestFileSelector.Choose(present, decisions).File);
+                keepers.Add(BestFileSelector.Choose(present, decisions, priorities).File);
             usable.Add((group, present, keepers));
         }
 

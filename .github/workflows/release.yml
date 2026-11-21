@@ -1,0 +1,88 @@
+name: Release
+
+# A tag like v1.2.0 builds the Windows installer and a zip and publishes both as a GitHub
+# release. "Run workflow" on the Actions page builds the same files as a download only.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Version
+        id: version
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { "0.0.0-dev.$env:GITHUB_RUN_NUMBER" }
+          "value=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Test
+        run: dotnet test --configuration Release
+
+      # Self-contained: the user needs neither .NET nor anything else installed.
+      - name: Publish app
+        run: >
+          dotnet publish src/VideoDedupe.App -c Release -r win-x64 --self-contained
+          -p:Version=${{ steps.version.outputs.value }} -o artifacts/VideoDedupe
+
+      # The LGPL build of FFmpeg may be shipped with the app; the app prefers the ffmpeg.exe
+      # next to it over one on PATH. The download is checked against the published checksums.
+      - name: Add FFmpeg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download latest --repo BtbN/FFmpeg-Builds --dir ffmpeg-download `
+            --pattern 'ffmpeg-n*-latest-win64-lgpl-[0-9]*.zip' --pattern checksums.sha256
+          $zip = Get-ChildItem ffmpeg-download -Filter *.zip |
+            Sort-Object { [version]($_.Name -replace '^ffmpeg-n([\d.]+)-.*$', '$1') } -Descending |
+            Select-Object -First 1
+          if (-not $zip) { throw 'No FFmpeg release build found.' }
+          $line = Get-Content ffmpeg-download/checksums.sha256 | Where-Object { $_ -match "\s\*?$([regex]::Escape($zip.Name))$" }
+          if (-not $line) { throw "No checksum for $($zip.Name)." }
+          if (($line -split '\s+')[0] -ne (Get-FileHash $zip.FullName -Algorithm SHA256).Hash) { throw "Checksum mismatch for $($zip.Name)." }
+          Expand-Archive $zip.FullName ffmpeg-extract
+          $bin = (Get-ChildItem ffmpeg-extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
+          Copy-Item "$bin/ffmpeg.exe", "$bin/ffprobe.exe" artifacts/VideoDedupe/
+          $license = Get-ChildItem ffmpeg-extract -Recurse -Filter LICENSE.txt | Select-Object -First 1
+          Copy-Item $license.FullName artifacts/VideoDedupe/FFmpeg-LICENSE.txt
+          "FFmpeg $($zip.Name) from https://github.com/BtbN/FFmpeg-Builds (LGPL build, sources at https://ffmpeg.org)" |
+            Set-Content artifacts/VideoDedupe/FFmpeg-SOURCE.txt
+          & artifacts/VideoDedupe/ffmpeg.exe -hide_banner -version | Select-Object -First 1
+
+      - name: Zip
+        run: Compress-Archive artifacts/VideoDedupe/* "artifacts/VideoDedupe-${{ steps.version.outputs.value }}-win-x64.zip"
+
+      - name: Installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
+          & $iscc "/DAppVersion=${{ steps.version.outputs.value }}" installer/VideoDedupe.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: VideoDedupe-${{ steps.version.outputs.value }}
+          path: |
+            artifacts/*.zip
+            artifacts/*-setup.exe
+
+      - name: GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}" --generate-notes
+          (Get-ChildItem artifacts/*.zip, artifacts/*-setup.exe).FullName

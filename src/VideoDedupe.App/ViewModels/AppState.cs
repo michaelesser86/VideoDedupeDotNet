@@ -25,6 +25,12 @@ public partial class AppState : ObservableObject
 
     partial void OnDbPathChanged(string value) => DatabaseChanged?.Invoke();
 
+    /// <summary>
+    /// Carries out a delete or quarantine still waiting in the undo bar. Runs before anything
+    /// that reads the library, so a scan never sees a file that is about to go.
+    /// </summary>
+    public Func<Task> FlushPendingAsync { get; set; } = () => Task.CompletedTask;
+
     /// <summary>Marks an operation as running until the returned scope is disposed.</summary>
     public IDisposable Busy()
     {

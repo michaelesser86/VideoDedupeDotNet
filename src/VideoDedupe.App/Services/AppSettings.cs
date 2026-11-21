@@ -29,6 +29,8 @@ public sealed class AppSettings
     public string Language { get; set; } = "";
     /// <summary>Id of a <see cref="ColorSchemes"/> entry.</summary>
     public string ColorScheme { get; set; } = "violet";
+    /// <summary>"quarantine" or "recycle": where clean-up puts the copies.</summary>
+    public string CleanupTarget { get; set; } = "quarantine";
 
     /// <summary>Missing or unreadable settings fall back to defaults instead of blocking startup.</summary>
     public static AppSettings Load(string path)

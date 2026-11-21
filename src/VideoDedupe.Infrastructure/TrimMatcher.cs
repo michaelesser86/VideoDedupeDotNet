@@ -14,8 +14,21 @@ internal static class TrimMatcher
     /// <summary>Frame hash keys of the anchors (percent positions are positive).</summary>
     public const int StartAnchorKey = -1, EndAnchorKey = -2;
 
+    /// <summary>
+    /// Second anchors, only taken where the first one is a nearly flat frame (a fade, a black
+    /// title card). A copy sharing that part shows the same flat frame, so it gets the second
+    /// anchor too.
+    /// </summary>
+    public const int StartFallbackKey = -3, EndFallbackKey = -4;
+
     /// <summary>Seconds between the anchor frame and the start or end of the file.</summary>
     public const double AnchorSec = 60;
+
+    /// <summary>Seconds between the fallback anchor and the start or end of the file.</summary>
+    public const double FallbackAnchorSec = 90;
+
+    /// <summary>The fallback key of an anchor key.</summary>
+    public static int FallbackOf(int anchorKey) => anchorKey == StartAnchorKey ? StartFallbackKey : EndFallbackKey;
 
     /// <summary>Shorter files have no room for anchors away from both ends.</summary>
     public const double MinDurationSec = 3 * AnchorSec;
@@ -39,7 +52,11 @@ internal static class TrimMatcher
         double tolSec, double maxDist, bool matchMirrored)
     {
         var result = new Dictionary<(long, long), Candidate>();
-        foreach (var (key, kind) in new[] { (StartAnchorKey, AppDb.TrimKinds.SameStart), (EndAnchorKey, AppDb.TrimKinds.SameEnd) })
+        foreach (var (key, kind) in new[]
+                 {
+                     (StartAnchorKey, AppDb.TrimKinds.SameStart), (EndAnchorKey, AppDb.TrimKinds.SameEnd),
+                     (StartFallbackKey, AppDb.TrimKinds.SameStart), (EndFallbackKey, AppDb.TrimKinds.SameEnd)
+                 })
         {
             var items = files
                 .Where(f => f.Hashes.TryGetValue(key, out var h) && IsInformative(h.Normal))

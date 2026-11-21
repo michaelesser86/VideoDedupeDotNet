@@ -73,11 +73,13 @@ public partial class LibraryViewModel : ObservableObject
                     IsEnabled = r.IsEnabled == 1,
                     IncludeSubdirs = r.IncludeSubdirs == 1,
                     ExcludeText = r.ExcludeText,
+                    Priority = RootVm.PriorityOption(r.Priority),
                     // Set last: the values above are loaded, not edited.
                     Changed = root => _ = SaveRootAsync(root)
                 });
             SelectedRoot = Roots.FirstOrDefault();
             HasRoots = Roots.Count > 0;
+            PrioritiesChanged?.Invoke();
             _state.Status = $"{Roots.Count} folders.";
         }
         catch (Exception ex)
@@ -160,6 +162,9 @@ public partial class LibraryViewModel : ObservableObject
 
     [ObservableProperty] private bool hasRoots;
 
+    /// <summary>A folder's priority changed, or folders were added or removed.</summary>
+    public event Action? PrioritiesChanged;
+
     // Saved on every change, so nothing is lost when the user forgets a save button.
     private async Task SaveRootAsync(RootVm root)
     {
@@ -168,6 +173,8 @@ public partial class LibraryViewModel : ObservableObject
             var db = await _state.OpenDbAsync();
             await db.SetScanRootEnabledAsync(root.Id, root.IsEnabled);
             await db.UpdateScanRootOptionsAsync(root.Id, root.IncludeSubdirs, root.ExcludeText);
+            await db.SetScanRootPriorityAsync(root.Id, root.PriorityValue);
+            PrioritiesChanged?.Invoke();
         }
         catch (Exception ex)
         {
@@ -184,6 +191,7 @@ public partial class LibraryViewModel : ObservableObject
         if (IsIndexing) return;
         try
         {
+            await _state.FlushPendingAsync();
             using var _ = _state.Busy();
             IsIndexing = true;
             IndexDiscovered = IndexProcessed = IndexOk = IndexFail = 0;

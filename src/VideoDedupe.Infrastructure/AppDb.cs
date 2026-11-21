@@ -79,6 +79,59 @@ namespace VideoDedupe.Infrastructure
             public string AddedUtc { get; set; } = "";
             public long IncludeSubdirs { get; init; } = 1;
             public string? ExcludeText { get; init; }
+            /// <summary>One of <see cref="FolderPriorities"/>' constants.</summary>
+            public long Priority { get; init; }
+        }
+
+        public async Task SetScanRootPriorityAsync(long id, int priority)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync("UPDATE ScanRoot SET Priority=@P WHERE Id=@Id;", new { Id = id, P = priority });
+        }
+
+        public sealed class QuarantinedFile
+        {
+            public long MediaFileId { get; init; }
+            public string OriginalPath { get; init; } = "";
+            public string QuarantinePath { get; init; } = "";
+            public long SizeBytes { get; init; }
+            public string DecidedUtc { get; init; } = "";
+        }
+
+        /// <summary>Files moved to quarantine and neither restored nor deleted since, newest first.</summary>
+        public async Task<List<QuarantinedFile>> ListQuarantinedFilesAsync()
+        {
+            using var cn = Open();
+            // Rows from before the QuarantinePath column keep the target only in the note.
+            var rows = await cn.QueryAsync<QuarantinedFile>(@"
+SELECT f.Id AS MediaFileId, f.Path AS OriginalPath,
+       COALESCE(d.QuarantinePath, CASE WHEN d.Note LIKE 'moved to: %' THEN substr(d.Note, 11) END, '') AS QuarantinePath,
+       f.SizeBytes AS SizeBytes, d.DecidedUtc AS DecidedUtc
+FROM ReviewDecision d
+JOIN MediaFile f ON f.Id = d.MediaFileId
+WHERE d.Decision = 'quarantine' AND f.IsDeleted = 1
+ORDER BY d.DecidedUtc DESC, f.Id DESC;");
+            return rows.ToList();
+        }
+
+        /// <summary>The file is back at its original path and part of the library again.</summary>
+        public async Task MarkQuarantineRestoredAsync(long mediaFileId)
+        {
+            using var cn = Open();
+            using var tx = cn.BeginTransaction();
+            await cn.ExecuteAsync(@"
+DELETE FROM ReviewDecision WHERE MediaFileId=@Id AND Decision='quarantine';
+UPDATE MediaFile SET IsDeleted=0 WHERE Id=@Id;", new { Id = mediaFileId }, tx);
+            tx.Commit();
+        }
+
+        /// <summary>The quarantined copy was deleted; it leaves the quarantine list.</summary>
+        public async Task MarkQuarantineDiscardedAsync(long mediaFileId)
+        {
+            using var cn = Open();
+            await cn.ExecuteAsync(
+                "UPDATE ReviewDecision SET Decision='deleted', DecidedUtc=@Utc WHERE MediaFileId=@Id AND Decision='quarantine';",
+                new { Id = mediaFileId, Utc = DateTime.UtcNow.ToString("O") });
         }
 
         public sealed class MediaFileRow
@@ -529,14 +582,19 @@ ON CONFLICT(MediaFileId) DO UPDATE SET
             using var cn = Open();
             using var tx = cn.BeginTransaction();
             await cn.ExecuteAsync(@"
-INSERT INTO ReviewDecision(MediaFileId, Decision, Note, DecidedUtc)
-VALUES (@Id, 'quarantine', @Note, @Utc)
+INSERT INTO ReviewDecision(MediaFileId, Decision, Note, DecidedUtc, QuarantinePath)
+VALUES (@Id, 'quarantine', @Note, @Utc, @Target)
 ON CONFLICT(MediaFileId) DO UPDATE SET
   Decision=excluded.Decision,
   Note=excluded.Note,
-  DecidedUtc=excluded.DecidedUtc;
+  DecidedUtc=excluded.DecidedUtc,
+  QuarantinePath=excluded.QuarantinePath;
 UPDATE MediaFile SET IsDeleted=1 WHERE Id=@Id;",
-                new { Id = mediaFileId, Note = $"moved to: {quarantinePath}", Utc = DateTime.UtcNow.ToString("O") }, tx);
+                new
+                {
+                    Id = mediaFileId, Note = $"moved to: {quarantinePath}", Target = quarantinePath,
+                    Utc = DateTime.UtcNow.ToString("O")
+                }, tx);
             tx.Commit();
         }
 

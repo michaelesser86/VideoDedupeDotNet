@@ -49,6 +49,20 @@ public static class DesktopShell
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
     }
 
+    public static async Task<string?> PickSaveFileAsync(string title, string suggestedName, string typeName, string pattern)
+    {
+        if (TopLevel() is not { } topLevel) return null;
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = title,
+            SuggestedFileName = suggestedName,
+            DefaultExtension = System.IO.Path.GetExtension(pattern),
+            ShowOverwritePrompt = true,
+            FileTypeChoices = [new FilePickerFileType(typeName) { Patterns = [pattern] }]
+        });
+        return file?.TryGetLocalPath();
+    }
+
     public static async Task<bool> CopyTextAsync(string text)
     {
         if (TopLevel()?.Clipboard is not { } clipboard) return false;

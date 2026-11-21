@@ -246,6 +246,8 @@ public sealed class DupeBuildService
     {
         TrimMatcher.StartAnchorKey => TrimMatcher.AnchorSec,
         TrimMatcher.EndAnchorKey => durationSec - TrimMatcher.AnchorSec,
+        TrimMatcher.StartFallbackKey => TrimMatcher.FallbackAnchorSec,
+        TrimMatcher.EndFallbackKey => durationSec - TrimMatcher.FallbackAnchorSec,
         // clamp timestamps inside the video (stability)
         _ => Math.Clamp(durationSec * (key / 100.0), 0.1, Math.Max(0.1, durationSec - 0.1))
     };
@@ -511,19 +513,39 @@ public sealed class DupeBuildService
             if (cached is not null && cached.TryGetValue(key, out var known))
                 map[key] = known;
 
-        var missing = keys.Where(p => !map.ContainsKey(p)).ToList();
-        if (missing.Count > 0)
+        await ExtractMissingAsync(keys);
+
+        // A flat anchor frame matches nothing; only then is the second anchor worth a frame.
+        if (withAnchors && dur >= TrimMatcher.MinDurationSec)
         {
+            var fallbacks = new List<int>();
+            foreach (var key in new[] { TrimMatcher.StartAnchorKey, TrimMatcher.EndAnchorKey })
+            {
+                if (!map.TryGetValue(key, out var anchor) || TrimMatcher.IsInformative(anchor.Normal))
+                    continue;
+                var fallback = TrimMatcher.FallbackOf(key);
+                if (cached is not null && cached.TryGetValue(fallback, out var known))
+                    map[fallback] = known;
+                else
+                    fallbacks.Add(fallback);
+            }
+            await ExtractMissingAsync(fallbacks);
+        }
+
+        if (computed.Count > 0)
+            await _db.UpsertFrameHashesAsync(f.Id, computed);
+        return map.Count > 0 ? map : null;
+
+        async Task ExtractMissingAsync(IReadOnlyList<int> wanted)
+        {
+            var missing = wanted.Where(p => !map.ContainsKey(p)).ToList();
+            if (missing.Count == 0) return;
             var timestamps = missing.Select(key => TimeOf(key, dur)).ToList();
             var frames = await _extractor.ExtractGrayFramesAsync(f.Path, timestamps, ct);
             for (var i = 0; i < missing.Count; i++)
                 if (frames[i] is { } frame)
                     map[missing[i]] = computed[missing[i]] = _hasher.ComputeHashes(frame);
         }
-
-        if (computed.Count > 0)
-            await _db.UpsertFrameHashesAsync(f.Id, computed);
-        return map.Count > 0 ? map : null;
     }
 
     private static double AverageDistance(Dictionary<int, FrameHash> reference, Dictionary<int, FrameHash> other,

@@ -9,8 +9,15 @@ public sealed class FfmpegTools
 
     public FfmpegTools(string? ffprobePath = null, string? ffmpegPath = null)
     {
-        FfprobePath = ffprobePath ?? "ffprobe";
-        FfmpegPath = ffmpegPath ?? "ffmpeg";
+        FfprobePath = ffprobePath ?? Bundled("ffprobe");
+        FfmpegPath = ffmpegPath ?? Bundled("ffmpeg");
+    }
+
+    /// <summary>The copy shipped next to the app (release builds), otherwise the one on PATH.</summary>
+    private static string Bundled(string tool)
+    {
+        var local = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? tool + ".exe" : tool);
+        return File.Exists(local) ? local : tool;
     }
 
     public async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string exe,
