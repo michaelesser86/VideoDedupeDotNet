@@ -31,6 +31,7 @@ public partial class DupeBuildViewModel : ObservableObject
     [ObservableProperty] private string framesCsv = "";
     [ObservableProperty] private bool matchMirrored = true;
     [ObservableProperty] private bool useAudio = true;
+    [ObservableProperty] private bool findTrimmed;
 
     [ObservableProperty] private bool isBuilding;
     [ObservableProperty] private string phase = "";
@@ -54,6 +55,7 @@ public partial class DupeBuildViewModel : ObservableObject
         FramesCsv = settings.DupeFramesCsv;
         MatchMirrored = settings.DupeMatchMirrored;
         UseAudio = settings.DupeUseAudio;
+        FindTrimmed = settings.DupeFindTrimmed;
         state.DatabaseChanged += () => _cts?.Cancel();
     }
 
@@ -66,6 +68,7 @@ public partial class DupeBuildViewModel : ObservableObject
         settings.DupeFramesCsv = FramesCsv;
         settings.DupeMatchMirrored = MatchMirrored;
         settings.DupeUseAudio = UseAudio;
+        settings.DupeFindTrimmed = FindTrimmed;
     }
 
     /// <summary>The detection positions, also used for the thumbnails.</summary>
@@ -111,7 +114,8 @@ public partial class DupeBuildViewModel : ObservableObject
                 MaxAvgDist: MaxAvgDist,
                 FramePercents: FramePositions,
                 MatchMirrored: MatchMirrored,
-                UseAudio: UseAudio);
+                UseAudio: UseAudio,
+                FindTrimmed: FindTrimmed);
             _state.Status =
                 $"Dupe build with tol={opt.TolSec}, min={opt.MinItems}, maxDist={opt.MaxAvgDist}, frames=[{string.Join(",", opt.FramePercents!)}]";
 

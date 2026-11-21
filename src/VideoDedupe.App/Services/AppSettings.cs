@@ -22,6 +22,7 @@ public sealed class AppSettings
     public string DupeFramesCsv { get; set; } = string.Join(",", DupeBuildOptions.DefaultFramePercents);
     public bool DupeMatchMirrored { get; set; } = Defaults.MatchMirrored;
     public bool DupeUseAudio { get; set; } = Defaults.UseAudio;
+    public bool DupeFindTrimmed { get; set; } = Defaults.FindTrimmed;
 
     /// <summary>Missing or unreadable settings fall back to defaults instead of blocking startup.</summary>
     public static AppSettings Load(string path)

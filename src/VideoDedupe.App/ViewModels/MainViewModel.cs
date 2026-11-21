@@ -31,6 +31,23 @@ public partial class MainViewModel : ObservableObject
             State.Status = "Database changed. Load roots or groups for the selected database.";
 
         State.Status = $"Database: {State.DbPath}";
+        _ = CheckToolsAsync();
+    }
+
+    // Without ffmpeg every scan fails file by file; say so once, up front.
+    private async Task CheckToolsAsync()
+    {
+        try
+        {
+            var missing = await new FfmpegTools().FindMissingToolsAsync();
+            if (missing.Count > 0)
+                State.Status = $"{string.Join(" and ", missing)} not found. Install FFmpeg and add its bin folder " +
+                               "to PATH, then restart VideoDedupe; scanning and detection need it.";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"Tool check failed: {ex.Message}");
+        }
     }
 
     /// <summary>Called when the main window closes.</summary>

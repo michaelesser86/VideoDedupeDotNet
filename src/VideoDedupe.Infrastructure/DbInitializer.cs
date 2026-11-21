@@ -95,12 +95,24 @@ CREATE TABLE IF NOT EXISTS ReviewDecision (
         await db.EnsureColumnAsync("DuplicateMember", "PHashDist", "REAL NULL");
         await db.EnsureColumnAsync("DuplicateMember", "AudioBer", "REAL NULL");
         await db.EnsureColumnAsync("DuplicateMember", "IsReference", "INTEGER NOT NULL DEFAULT 0");
+        await db.EnsureColumnAsync("DuplicateMember", "TrimKind", "TEXT NULL");
+        await db.EnsureColumnAsync("DuplicateMember", "TrimDiffSec", "REAL NULL");
 
         await db.ExecuteAsync(@"
 CREATE TABLE IF NOT EXISTS AudioPrint (
   MediaFileId INTEGER PRIMARY KEY,
   Strategy TEXT NOT NULL,
   Data BLOB NOT NULL,                -- empty fingerprint = file has no usable audio
+  FOREIGN KEY(MediaFileId) REFERENCES MediaFile(Id) ON DELETE CASCADE
+);
+
+-- Frames at absolute timestamps, used to verify shortened copies.
+CREATE TABLE IF NOT EXISTS TimedFrameHash (
+  MediaFileId INTEGER NOT NULL,
+  TimeMs INTEGER NOT NULL,
+  Hash64 INTEGER NOT NULL,
+  MirrorHash64 INTEGER NOT NULL,
+  PRIMARY KEY(MediaFileId, TimeMs),
   FOREIGN KEY(MediaFileId) REFERENCES MediaFile(Id) ON DELETE CASCADE
 );
 
@@ -133,6 +145,7 @@ CREATE TABLE IF NOT EXISTS Meta (
 INSERT INTO Meta(Key, Value) VALUES ('HashVersion', '') ON CONFLICT(Key) DO NOTHING;
 DELETE FROM FrameHash WHERE (SELECT Value FROM Meta WHERE Key='HashVersion') IS NOT @Version;
 DELETE FROM VisualHash WHERE (SELECT Value FROM Meta WHERE Key='HashVersion') IS NOT @Version;
+DELETE FROM TimedFrameHash WHERE (SELECT Value FROM Meta WHERE Key='HashVersion') IS NOT @Version;
 UPDATE Meta SET Value=@Version WHERE Key='HashVersion';", new { Version = Core.DHashService.Version });
     }
 }

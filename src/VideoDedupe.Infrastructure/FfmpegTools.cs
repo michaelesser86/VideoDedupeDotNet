@@ -31,6 +31,26 @@ public sealed class FfmpegTools
         return (p.ExitCode, await stdoutTask, await stderrTask);
     }
 
+    /// <summary>Names of the tools that cannot be started (not installed or not on PATH).</summary>
+    public async Task<IReadOnlyList<string>> FindMissingToolsAsync(CancellationToken ct = default)
+    {
+        var missing = new List<string>();
+        foreach (var exe in new[] { FfmpegPath, FfprobePath })
+        {
+            try
+            {
+                var (exitCode, _, _) = await RunAsync(exe, ["-hide_banner", "-version"], ct);
+                if (exitCode != 0) missing.Add(Path.GetFileName(exe));
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or FileNotFoundException
+                                           or InvalidOperationException)
+            {
+                missing.Add(Path.GetFileName(exe));
+            }
+        }
+        return missing;
+    }
+
     public async Task<byte[]> RunToBytesAsync(string exe, IReadOnlyList<string> arguments, CancellationToken ct)
     {
         using var p = Start(exe, arguments, ct);

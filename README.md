@@ -26,6 +26,12 @@ and helps you keep the best one. Desktop app (Avalonia) plus a command-line tool
    middle of each file are fingerprinted and compared (`--audio`, `--max-audio-ber`).
 5. **Mirrored copies**: every frame hash is also computed for the mirror image, so videos
    flipped left to right match too (`--mirror`).
+6. **Shortened copies** (optional, `--trimmed=true` or "Find shortened copies" in the app):
+   copies with a cut intro, credits or ads. Every video of at least 3 minutes gets two more
+   frames, 60 s after the start and 60 s before the end; files of different length that share
+   one of them are checked at the shorter file's own positions in the longer one. Openings
+   shared by many files (TV series) are ignored. This makes the first run up to ~65 % slower
+   (measured on 1 GB files from a hard disk); later runs reuse the cached frames.
 
 Pairs you mark as "not a duplicate" in the app are remembered and never grouped again.
 "Clean up all groups" keeps the best copy of each group (or the files marked as keep) and moves

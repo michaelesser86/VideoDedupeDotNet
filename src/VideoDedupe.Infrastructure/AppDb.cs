@@ -204,6 +204,11 @@ WHERE MediaFileId IN (
     SELECT Id FROM MediaFile
     WHERE Path = @Path AND (SizeBytes IS NOT @SizeBytes OR ModifiedUtc IS NOT @ModifiedUtc)
 );
+DELETE FROM TimedFrameHash
+WHERE MediaFileId IN (
+    SELECT Id FROM MediaFile
+    WHERE Path = @Path AND (SizeBytes IS NOT @SizeBytes OR ModifiedUtc IS NOT @ModifiedUtc)
+);
 DELETE FROM AudioPrint
 WHERE MediaFileId IN (
     SELECT Id FROM MediaFile
@@ -324,6 +329,34 @@ ON CONFLICT(MediaFileId, Strategy, Slot) DO UPDATE SET Hash64=excluded.Hash64;",
             tx.Commit();
         }
 
+        /// <summary>Cached hashes of frames at absolute times (milliseconds) of one file.</summary>
+        public async Task<Dictionary<long, Core.FrameHash>> GetTimedFrameHashesAsync(long mediaFileId)
+        {
+            using var cn = Open();
+            var rows = await cn.QueryAsync<(long TimeMs, long Hash64, long MirrorHash64)>(
+                "SELECT TimeMs, Hash64, MirrorHash64 FROM TimedFrameHash WHERE MediaFileId=@Id;", new { Id = mediaFileId });
+            return rows.ToDictionary(r => r.TimeMs,
+                r => new Core.FrameHash(unchecked((ulong)r.Hash64), unchecked((ulong)r.MirrorHash64)));
+        }
+
+        public async Task UpsertTimedFrameHashesAsync(long mediaFileId, IReadOnlyDictionary<long, Core.FrameHash> hashes)
+        {
+            using var cn = Open();
+            using var tx = cn.BeginTransaction();
+            await cn.ExecuteAsync(@"
+INSERT INTO TimedFrameHash(MediaFileId, TimeMs, Hash64, MirrorHash64)
+VALUES (@Id, @TimeMs, @Hash64, @MirrorHash64)
+ON CONFLICT(MediaFileId, TimeMs) DO UPDATE SET Hash64=excluded.Hash64, MirrorHash64=excluded.MirrorHash64;",
+                hashes.Select(h => new
+                {
+                    Id = mediaFileId,
+                    TimeMs = h.Key,
+                    Hash64 = unchecked((long)h.Value.Normal),
+                    MirrorHash64 = unchecked((long)h.Value.Mirrored)
+                }), tx);
+            tx.Commit();
+        }
+
         public async Task<byte[]?> GetAudioPrintAsync(long mediaFileId, string strategy)
         {
             using var cn = Open();
@@ -427,8 +460,8 @@ RETURNING Id;
             {
                 ct.ThrowIfCancellationRequested();
                 await cn.ExecuteAsync(new CommandDefinition(@"
-INSERT INTO DuplicateMember(GroupId, MediaFileId, AvgDist, Mirrored, PHashDist, AudioBer, IsReference)
-VALUES (@GroupId, @MediaFileId, @AvgDist, @Mirrored, @PHashDist, @AudioBer, @IsReference);
+INSERT INTO DuplicateMember(GroupId, MediaFileId, AvgDist, Mirrored, PHashDist, AudioBer, IsReference, TrimKind, TrimDiffSec)
+VALUES (@GroupId, @MediaFileId, @AvgDist, @Mirrored, @PHashDist, @AudioBer, @IsReference, @TrimKind, @TrimDiffSec);
 ", new
                 {
                     GroupId = groupId,
@@ -437,7 +470,9 @@ VALUES (@GroupId, @MediaFileId, @AvgDist, @Mirrored, @PHashDist, @AudioBer, @IsR
                     Mirrored = m.Mirrored ? 1 : 0,
                     m.PHashDist,
                     m.AudioBer,
-                    IsReference = m.IsReference ? 1 : 0
+                    IsReference = m.IsReference ? 1 : 0,
+                    m.TrimKind,
+                    m.TrimDiffSec
                 }, transaction: tx, cancellationToken: ct));
             }
 
@@ -454,6 +489,8 @@ VALUES (@GroupId, @MediaFileId, @AvgDist, @Mirrored, @PHashDist, @AudioBer, @IsR
             public double? PHashDist { get; set; }
             public double? AudioBer { get; set; }
             public long IsReference { get; set; }
+            public string? TrimKind { get; set; }
+            public double? TrimDiffSec { get; set; }
             public long Id { get; set; }
             public string Path { get; set; } = "";
             public long SizeBytes { get; set; }
@@ -546,6 +583,8 @@ SELECT
   m.PHashDist as PHashDist,
   m.AudioBer as AudioBer,
   m.IsReference as IsReference,
+  m.TrimKind as TrimKind,
+  m.TrimDiffSec as TrimDiffSec,
   f.Id as Id,
   f.Path as Path,
   f.SizeBytes as SizeBytes,
@@ -588,7 +627,9 @@ ORDER BY m.AvgDist ASC;
                     r.Mirrored != 0,
                     r.PHashDist,
                     r.AudioBer,
-                    r.IsReference != 0
+                    r.IsReference != 0,
+                    r.TrimKind,
+                    r.TrimDiffSec
                 )).ToList();
 
                 result.Add((g, members));
@@ -621,10 +662,24 @@ ORDER BY m.AvgDist ASC;
             public double? AudioBer { get; set; }
             /// <summary>The file the others were compared with.</summary>
             public bool IsReference { get; set; }
+            /// <summary>For a shortened copy: <see cref="TrimKinds.SameStart"/> or <see cref="TrimKinds.SameEnd"/>.</summary>
+            public string? TrimKind { get; set; }
+            /// <summary>For a shortened copy: its duration minus the duration of the file it matched.</summary>
+            public double? TrimDiffSec { get; set; }
         }
 
         /// <summary>A group member with the evidence that put it there.</summary>
         public sealed record GroupMember(MediaFileRow File, double AvgDist, bool Mirrored = false,
-            double? PHashDist = null, double? AudioBer = null, bool IsReference = false);
+            double? PHashDist = null, double? AudioBer = null, bool IsReference = false,
+            string? TrimKind = null, double? TrimDiffSec = null);
+
+        /// <summary>How a shortened copy lines up with the longer file.</summary>
+        public static class TrimKinds
+        {
+            /// <summary>Both start alike; one ends earlier (outro, credits or ads cut).</summary>
+            public const string SameStart = "same-start";
+            /// <summary>Both end alike; one starts later (intro or ads cut).</summary>
+            public const string SameEnd = "same-end";
+        }
     }
 }

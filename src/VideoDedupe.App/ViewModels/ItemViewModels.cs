@@ -114,7 +114,13 @@ public partial class MemberVm : ObservableObject
             var parts = new List<string> { $"Picture {PictureSimilarity:P0} similar" };
             if (Evidence.Mirrored)
                 parts.Add("mirrored");
-            if (Evidence.AvgDist > Group.MaxAvgDist)
+            if (Evidence.TrimKind is { } kind && Evidence.TrimDiffSec is double diff)
+            {
+                var length = TimeSpan.FromSeconds(Math.Abs(diff)).ToString(@"m\:ss", CultureInfo.InvariantCulture);
+                var where = kind == AppDb.TrimKinds.SameStart ? "at the end" : "at the start";
+                parts.Add(diff < 0 ? $"{length} shorter, cut {where}" : $"{length} longer, extra footage {where}");
+            }
+            else if (Evidence.AvgDist > Group.MaxAvgDist)
             {
                 // Audio is only compared when the scene check did not confirm the match.
                 parts.Add(Evidence.AudioBer is double ber

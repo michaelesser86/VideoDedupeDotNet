@@ -366,6 +366,10 @@
                                 ToolTip.Tip="When the picture comparison is borderline and the scene check does not confirm it, compare two minutes of audio."
                                 IsChecked="{Binding Build.UseAudio}"/>
 
+                      <CheckBox Content="Find shortened copies (first run up to ~65 % slower)"
+                                ToolTip.Tip="Also match copies with a cut intro, credits or ads. Needs two more frames per video and checks every video, not only those of the same length. Only the first run pays for this; the frames are cached."
+                                IsChecked="{Binding Build.FindTrimmed}"/>
+
                       <!-- Tol -->
                       <Grid ColumnDefinitions="Auto,* ,Auto" ColumnSpacing="12">
                         <TextBlock VerticalAlignment="Center" Text="Tolerance (sec)"/>

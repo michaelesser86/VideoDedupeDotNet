@@ -18,7 +18,8 @@ public sealed record DupeBuildOptions(
     int MaxParallelism = 0,
     bool UseAudio = true,
     double MaxAudioBer = 0.25,
-    bool MatchMirrored = true
+    bool MatchMirrored = true,
+    bool FindTrimmed = false
 )
 {
     public static readonly IReadOnlyList<int> DefaultFramePercents = [20, 50, 80];
@@ -64,7 +65,12 @@ public sealed class DupeBuildService
     {
         public double? PHashDist { get; set; }
         public double? AudioBer { get; set; }
+        public string? TrimKind { get; set; }
+        public double? TrimDiffSec { get; set; }
     }
+
+    /// <summary>A group found in this run, saved after all phases are done.</summary>
+    internal sealed record PendingGroup(long ReferenceId, List<Match> Members);
 
     public async Task<int> RunAsync(
         DupeBuildOptions opt,
@@ -101,13 +107,17 @@ public sealed class DupeBuildService
         //    run time and a single frame extraction barely uses one core, so running several
         //    at once scales almost linearly. The clustering below is unchanged and only reads
         //    these results, so the groups are the same as with sequential hashing.
-        var needed = buckets.SelectMany(b => FilesInQualifyingWindows(b, opt.TolSec, opt.MinItems)).ToList();
+        //    Shortened copies have no partner of the same length, so that search needs every file.
+        var needed = opt.FindTrimmed
+            ? files.Where(f => f.DurationSec > 1.0).ToList()
+            : buckets.SelectMany(b => FilesInQualifyingWindows(b, opt.TolSec, opt.MinItems)).ToList();
         var hashed = await HashAllAsync(needed, positions, opt, candidateTotal - needed.Count,
             candidateTotal, progress, ct);
 
         // 4) Cluster
         var sceneHashes = new ConcurrentDictionary<(long, bool), Lazy<Task<Dictionary<int, ulong>>>>();
         var audioPrints = new ConcurrentDictionary<long, Lazy<Task<AudioFingerprint?>>>();
+        var groups = new List<PendingGroup>();
         int savedGroups = 0;
 
         for (int bi = 0; bi < buckets.Count; bi++)
@@ -184,29 +194,40 @@ public sealed class DupeBuildService
 
                 foreach (var match in final)
                     bucketFiles.Remove(match.File);
-
-                // 6) Save group + members
-                ct.ThrowIfCancellationRequested();
-                await _db.InsertDuplicateGroupWithMembersAsync(
-                    algorithm: Algorithm,
-                    frames: $"dhash={string.Join(",", positions)};scene-phash={opt.RefinementFrames}",
-                    tolSec: opt.TolSec,
-                    maxAvgDist: opt.MaxAvgDist,
-                    members: final.Select(x => new AppDb.DuplicateMemberRow
-                    {
-                        MediaFileId = x.File.Id,
-                        AvgDist = x.Avg,
-                        Mirrored = x.Mirrored,
-                        PHashDist = x.PHashDist,
-                        AudioBer = x.AudioBer,
-                        IsReference = x.File.Id == seed.Id
-                    }),
-                    ct: ct);
-
-                savedGroups++;
-                progress?.Report(new DupeBuildProgress("Saved groups", 0, savedGroups,
-                    OverallTotal: candidateTotal, OverallDone: candidateTotal));
+                groups.Add(new PendingGroup(seed.Id, final));
             }
+        }
+
+        // 5) Shortened copies (optional): pairs of different length that share their start or end.
+        if (opt.FindTrimmed)
+            await AddTrimmedCopiesAsync(files, hashed, positions, groups, notDuplicates, opt,
+                candidateTotal, progress, ct);
+
+        // 6) Save groups + members
+        foreach (var group in groups)
+        {
+            ct.ThrowIfCancellationRequested();
+            await _db.InsertDuplicateGroupWithMembersAsync(
+                algorithm: Algorithm,
+                frames: $"dhash={string.Join(",", positions)};scene-phash={opt.RefinementFrames}",
+                tolSec: opt.TolSec,
+                maxAvgDist: opt.MaxAvgDist,
+                members: group.Members.Select(x => new AppDb.DuplicateMemberRow
+                {
+                    MediaFileId = x.File.Id,
+                    AvgDist = x.Avg,
+                    Mirrored = x.Mirrored,
+                    PHashDist = x.PHashDist,
+                    AudioBer = x.AudioBer,
+                    IsReference = x.File.Id == group.ReferenceId,
+                    TrimKind = x.TrimKind,
+                    TrimDiffSec = x.TrimDiffSec
+                }),
+                ct: ct);
+
+            savedGroups++;
+            progress?.Report(new DupeBuildProgress("Saved groups", 0, savedGroups,
+                OverallTotal: candidateTotal, OverallDone: candidateTotal));
         }
 
         progress?.Report(new DupeBuildProgress(
@@ -218,6 +239,124 @@ public sealed class DupeBuildService
             OverallDone: candidateTotal));
 
         return savedGroups;
+    }
+
+    /// <summary>Timestamp of a hash key: a percent position, or one of the trim anchors.</summary>
+    internal static double TimeOf(int key, double durationSec) => key switch
+    {
+        TrimMatcher.StartAnchorKey => TrimMatcher.AnchorSec,
+        TrimMatcher.EndAnchorKey => durationSec - TrimMatcher.AnchorSec,
+        // clamp timestamps inside the video (stability)
+        _ => Math.Clamp(durationSec * (key / 100.0), 0.1, Math.Max(0.1, durationSec - 0.1))
+    };
+
+    private async Task AddTrimmedCopiesAsync(IReadOnlyList<AppDb.MediaFileRow> files,
+        Dictionary<long, Dictionary<int, FrameHash>?> hashed, IReadOnlyList<int> positions, List<PendingGroup> groups,
+        IReadOnlySet<(long A, long B)> notDuplicates, DupeBuildOptions opt, int candidateTotal,
+        IProgress<DupeBuildProgress>? progress, CancellationToken ct)
+    {
+        progress?.Report(new DupeBuildProgress("Searching shortened copies", 1, 0,
+            OverallTotal: candidateTotal, OverallDone: candidateTotal));
+        var anchored = files
+            .Where(f => hashed.GetValueOrDefault(f.Id) is { } h &&
+                        h.ContainsKey(TrimMatcher.StartAnchorKey) && h.ContainsKey(TrimMatcher.EndAnchorKey))
+            .Select(f => (File: f, Hashes: hashed[f.Id]!))
+            .ToList();
+        var candidates = TrimMatcher.FindCandidates(anchored, opt.TolSec, opt.MaxAvgDist, opt.MatchMirrored)
+            .Where(c => !notDuplicates.Contains(PairKey(c.Longer.Id, c.Shorter.Id)))
+            .ToList();
+
+        // Shared openings or credits also match at the anchors, so every candidate is checked
+        // where both copies must show the same picture: at the shorter file's own positions.
+        var done = 0;
+        var verified = new ConcurrentBag<(TrimMatcher.Candidate Candidate, double Avg)>();
+        await Parallel.ForEachAsync(candidates,
+            new ParallelOptions { MaxDegreeOfParallelism = opt.EffectiveParallelism, CancellationToken = ct },
+            async (c, token) =>
+            {
+                if (await VerifyTrimAsync(c, hashed[c.Shorter.Id]!, positions, token) is double avg && avg <= opt.MaxAvgDist)
+                    verified.Add((c, avg));
+                progress?.Report(new DupeBuildProgress("Checking shortened copies", candidates.Count,
+                    Interlocked.Increment(ref done), c.Shorter.Path, candidateTotal, candidateTotal));
+            });
+
+        var groupOf = new Dictionary<long, PendingGroup>();
+        foreach (var g in groups)
+            foreach (var m in g.Members)
+                groupOf[m.File.Id] = g;
+
+        foreach (var (c, avg) in verified.OrderBy(v => v.Avg).ThenBy(v => v.Candidate.Longer.Id).ThenBy(v => v.Candidate.Shorter.Id))
+        {
+            var longerGroup = groupOf.GetValueOrDefault(c.Longer.Id);
+            var shorterGroup = groupOf.GetValueOrDefault(c.Shorter.Id);
+            if (longerGroup is not null && shorterGroup is not null)
+                continue; // both already grouped; merging groups could chain unrelated files
+
+            if (longerGroup is null && shorterGroup is null)
+            {
+                if (opt.MinItems > 2) continue;
+                var group = new PendingGroup(c.Longer.Id,
+                [
+                    new Match(c.Longer, 0, false),
+                    new Match(c.Shorter, avg, c.Mirrored)
+                    {
+                        TrimKind = c.Kind,
+                        TrimDiffSec = c.Shorter.DurationSec - c.Longer.DurationSec
+                    }
+                ]);
+                groups.Add(group);
+                groupOf[c.Longer.Id] = groupOf[c.Shorter.Id] = group;
+                continue;
+            }
+
+            // One of them is already grouped: the other joins that group.
+            var target = (longerGroup ?? shorterGroup)!;
+            var (newcomer, partner) = longerGroup is null ? (c.Longer, c.Shorter) : (c.Shorter, c.Longer);
+            if (target.Members.Any(m => notDuplicates.Contains(PairKey(m.File.Id, newcomer.Id))))
+                continue;
+            var partnerMatch = target.Members.First(m => m.File.Id == partner.Id);
+            target.Members.Add(new Match(newcomer, avg, partnerMatch.Mirrored ^ c.Mirrored)
+            {
+                TrimKind = c.Kind,
+                TrimDiffSec = newcomer.DurationSec - partner.DurationSec
+            });
+            groupOf[newcomer.Id] = target;
+        }
+    }
+
+    /// <summary>
+    /// Average distance between the shorter file's frames and the frames of the longer file at
+    /// the same moments of the shared footage, or null when too few frames could be compared.
+    /// </summary>
+    private async Task<double?> VerifyTrimAsync(TrimMatcher.Candidate c, Dictionary<int, FrameHash> shorterHashes,
+        IReadOnlyList<int> positions, CancellationToken ct)
+    {
+        var shorterDur = c.Shorter.DurationSec!.Value;
+        var offset = c.Kind == AppDb.TrimKinds.SameStart ? 0 : c.Longer.DurationSec!.Value - shorterDur;
+        var times = positions
+            .Where(shorterHashes.ContainsKey)
+            .Select(p => (Position: p, TimeMs: (long)Math.Round((TimeOf(p, shorterDur) + offset) * 1000)))
+            .ToList();
+
+        var cached = await _db.GetTimedFrameHashesAsync(c.Longer.Id);
+        var missing = times.Where(t => !cached.ContainsKey(t.TimeMs)).Select(t => t.TimeMs).Distinct().ToList();
+        if (missing.Count > 0 && File.Exists(c.Longer.Path))
+        {
+            var frames = await _extractor.ExtractGrayFramesAsync(c.Longer.Path, missing.Select(ms => ms / 1000.0).ToList(), ct);
+            var computed = new Dictionary<long, FrameHash>();
+            for (var i = 0; i < missing.Count; i++)
+                if (frames[i] is { } frame)
+                    cached[missing[i]] = computed[missing[i]] = _hasher.ComputeHashes(frame);
+            if (computed.Count > 0)
+                await _db.UpsertTimedFrameHashesAsync(c.Longer.Id, computed);
+        }
+
+        var distances = times
+            .Where(t => cached.ContainsKey(t.TimeMs))
+            .Select(t => (double)DHashService.HammingDistance(cached[t.TimeMs].Normal,
+                c.Mirrored ? shorterHashes[t.Position].Mirrored : shorterHashes[t.Position].Normal))
+            .ToList();
+        return distances.Count >= 2 ? distances.Average() : null;
     }
 
     private static bool ConfirmedByScenes(Match m, DupeBuildOptions opt) => m.PHashDist <= opt.MaxPHashDist;
@@ -345,7 +484,7 @@ public sealed class DupeBuildService
 
         var results = await ParallelMapAsync(files, opt.EffectiveParallelism, async f =>
         {
-            var hashes = await HashFileAsync(f, positions, cached.GetValueOrDefault(f.Id), ct);
+            var hashes = await HashFileAsync(f, positions, opt.FindTrimmed, cached.GetValueOrDefault(f.Id), ct);
             var n = Interlocked.Increment(ref done);
             progress?.Report(new DupeBuildProgress("Hashing frames", files.Count, n, f.Path,
                 overallTotal, alreadyDone + n));
@@ -355,22 +494,27 @@ public sealed class DupeBuildService
     }
 
     private async Task<Dictionary<int, FrameHash>?> HashFileAsync(AppDb.MediaFileRow f,
-        IReadOnlyList<int> positions, Dictionary<int, FrameHash>? cached, CancellationToken ct)
+        IReadOnlyList<int> positions, bool withAnchors, Dictionary<int, FrameHash>? cached, CancellationToken ct)
     {
         if (f.DurationSec is not double dur || dur <= 1.0 || string.IsNullOrWhiteSpace(f.Path) || !File.Exists(f.Path))
             return null;
 
+        // Keys are percent positions; the negative anchor keys are fixed times from the start
+        // and from the end, which a shortened copy shares with its original.
+        var keys = positions.ToList();
+        if (withAnchors && dur >= TrimMatcher.MinDurationSec)
+            keys.AddRange([TrimMatcher.StartAnchorKey, TrimMatcher.EndAnchorKey]);
+
         var map = new Dictionary<int, FrameHash>();
         var computed = new Dictionary<int, FrameHash>();
-        foreach (var pos in positions)
-            if (cached is not null && cached.TryGetValue(pos, out var known))
-                map[pos] = known;
+        foreach (var key in keys)
+            if (cached is not null && cached.TryGetValue(key, out var known))
+                map[key] = known;
 
-        var missing = positions.Where(p => !map.ContainsKey(p)).ToList();
+        var missing = keys.Where(p => !map.ContainsKey(p)).ToList();
         if (missing.Count > 0)
         {
-            // clamp timestamps inside the video (stability)
-            var timestamps = missing.Select(pos => Math.Clamp(dur * (pos / 100.0), 0.1, Math.Max(0.1, dur - 0.1))).ToList();
+            var timestamps = missing.Select(key => TimeOf(key, dur)).ToList();
             var frames = await _extractor.ExtractGrayFramesAsync(f.Path, timestamps, ct);
             for (var i = 0; i < missing.Count; i++)
                 if (frames[i] is { } frame)
@@ -389,7 +533,8 @@ public sealed class DupeBuildService
         var shared = 0;
         foreach (var (position, hash) in reference)
         {
-            if (!other.TryGetValue(position, out var o)) continue;
+            // Anchor frames (negative keys) only serve the search for shortened copies.
+            if (position < 0 || !other.TryGetValue(position, out var o)) continue;
             sum += DHashService.HammingDistance(hash.Normal, mirrored ? o.Mirrored : o.Normal);
             shared++;
         }
@@ -458,7 +603,7 @@ public sealed class DupeBuildService
     /// <summary>
     /// Parses <c>--name=value</c> options; unknown or malformed values keep their defaults.
     /// <c>--tol --min --maxdist --frames --clear --refine-frames --scene-threshold
-    /// --max-phash --margin --parallel --audio --max-audio-ber --mirror</c>
+    /// --max-phash --margin --parallel --audio --max-audio-ber --mirror --trimmed</c>
     /// </summary>
     public static DupeBuildOptions ParseArgs(IEnumerable<string> args)
     {
@@ -491,6 +636,7 @@ public sealed class DupeBuildService
                 "--audio" when bool.TryParse(value, out var b) => opt with { UseAudio = b },
                 "--max-audio-ber" when Double(out var d) => opt with { MaxAudioBer = d },
                 "--mirror" when bool.TryParse(value, out var b) => opt with { MatchMirrored = b },
+                "--trimmed" when bool.TryParse(value, out var b) => opt with { FindTrimmed = b },
                 _ => opt
             };
         }
